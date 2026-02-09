@@ -39,7 +39,7 @@ class EastMoneyAPI(BaseBrokerAPI):
                 "fields": "f43,f44,f45,f46,f47,f48,f49,f14",
             }
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.3650.96 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
                 "Accept": "application/json, text/javascript, */*; q=0.01",
                 "Accept-Language": "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
                 "Connection": "keep-alive"
@@ -66,7 +66,7 @@ class EastMoneyAPI(BaseBrokerAPI):
         try:
             url = f"https://fund.eastmoney.com/pingzhongdata/{code}.js"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.3650.96 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
                 "Connection": "keep-alive"
@@ -96,29 +96,41 @@ class EastMoneyAPI(BaseBrokerAPI):
 
     async def get_fund_info(self, code: str) -> Optional[FundInfo]:
         try:
-            url = f"https://fund.eastmoney.com/{code}.html"
+            url = f"https://fund.eastmoney.com/pingzhongdata/{code}.js"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.3650.96 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
                 "Connection": "keep-alive"
             }
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5.0)) as response:
-                    logger.debug(f"Response: {await response.text()}")
                     if response.status == 404:
                         logger.warning(f"EastMoney API returned 404 for {url}")
                         return None
                     content = await response.text()
-                name_match = re.search(
-                    r'<div class="fundDetail-tit"><h4>(.*?)</h4>', content
-                )
-                type_match = re.search(r"基金类型：(.*?)<", content)
-                nav_match = re.search(r"单位净值：(.*?)<", content)
-
+                # 从JavaScript文件中提取基金信息
+                name_match = re.search(r'var fS_name = "([^"]+)";', content)
+                code_match = re.search(r'var fS_code = "([^"]+)";', content)
+                # 尝试从JavaScript文件中提取基金类型
+                type_match = re.search(r'var fS_type = "([^"]+)";', content)
+                # 从净值趋势中获取最新净值
+                nav_match = re.search(r'var Data_netWorthTrend = \[(.*?)\];', content, re.DOTALL)
+                
                 fund_name = name_match.group(1) if name_match else code
+                # 从接口数据中提取基金类型，如果没有找到则默认为"未知"
                 fund_type = type_match.group(1) if type_match else "未知"
-                nav = float(nav_match.group(1)) if nav_match else 0.0
+                
+                # 获取最新净值
+                nav = 0.0
+                if nav_match:
+                    try:
+                        nav_data = json.loads("[" + nav_match.group(1) + "]")
+                        if nav_data:
+                            latest = nav_data[-1]
+                            nav = float(latest.get("y", 0))
+                    except Exception as e:
+                        logger.error(f"Error parsing nav data: {e}")
 
                 return FundInfo(
                     fund_code=code,
@@ -140,7 +152,7 @@ class SinaAPI(BaseBrokerAPI):
             sina_code = f"sh{code}" if code.startswith("6") else f"sz{code}"
             url = f"https://hq.sinajs.cn/list={sina_code}"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.3650.96 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
                 "Connection": "keep-alive"
@@ -173,7 +185,7 @@ class SinaAPI(BaseBrokerAPI):
         try:
             url = f"https://hq.sinajs.cn/list=ff_{code}"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.3650.96 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
                 "Connection": "keep-alive"
@@ -204,32 +216,9 @@ class SinaAPI(BaseBrokerAPI):
 
     async def get_fund_info(self, code: str) -> Optional[FundInfo]:
         try:
-            url = f"https://finance.sina.com.cn/fund/quotes/{code}/unit.shtml"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.3650.96 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language": "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
-                "Connection": "keep-alive"
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5.0)) as response:
-                    logger.debug(f"Response: {response}")
-                    content = await response.text()
-                name_match = re.search(r"<h1>(.*?)\(.*?\)</h1>", content)
-                type_match = re.search(r"基金类型：(.*?)<", content)
-                nav_match = re.search(r"单位净值：(.*?)<", content)
-
-                fund_name = name_match.group(1) if name_match else code
-                fund_type = type_match.group(1) if type_match else "未知"
-                nav = float(nav_match.group(1)) if nav_match else 0.0
-
-                return FundInfo(
-                    fund_code=code,
-                    fund_name=fund_name,
-                    fund_type=fund_type,
-                    nav=nav,
-                    establish_date=None,
-                )
+            # 由于新浪财经API返回404，这里直接返回None，让系统使用其他数据源
+            logger.warning(f"Sina API is not reliable for fund info, using other data sources instead")
+            return None
         except Exception as e:
             logger.error(f"Sina fund info API error: {e}")
         return None
@@ -243,7 +232,7 @@ class QQAPI(BaseBrokerAPI):
             qq_code = f"sh{code}" if code.startswith("6") else f"sz{code}"
             url = f"https://qt.gtimg.cn/q={qq_code}"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.3650.96 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
                 "Connection": "keep-alive"
@@ -276,7 +265,7 @@ class QQAPI(BaseBrokerAPI):
         try:
             url = f"https://fund.qq.com/data/getFundInfo?fundcode={code}"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.3650.96 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
                 "Accept": "application/json, text/javascript, */*; q=0.01",
                 "Accept-Language": "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
                 "Connection": "keep-alive"
@@ -303,7 +292,7 @@ class QQAPI(BaseBrokerAPI):
         try:
             url = f"https://fund.qq.com/data/getFundInfo?fundcode={code}"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.3650.96 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
                 "Accept": "application/json, text/javascript, */*; q=0.01",
                 "Accept-Language": "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
                 "Connection": "keep-alive"
@@ -341,7 +330,7 @@ class HSBCAPI(BaseBrokerAPI):
         try:
             url = f"https://fund.hsbc.com.cn/data/getFundInfo?fundcode={code}"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.3650.96 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
                 "Accept": "application/json, text/javascript, */*; q=0.01",
                 "Accept-Language": "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
                 "Connection": "keep-alive"
@@ -454,19 +443,26 @@ class MarketDataService:
     async def get_fund_info(self, fund_code: str) -> Optional[FundInfo]:
         """获取基金信息"""
         try:
+            logger.info(f"Getting fund info for {fund_code}")
             # 尝试使用券商API
             for broker in self.brokers:
                 try:
+                    logger.debug(f"Trying broker: {broker.__class__.__name__}")
                     info = await broker.get_fund_info(fund_code)
                     if info:
+                        logger.info(f"Successfully got fund info from {broker.__class__.__name__}")
                         return info
+                    else:
+                        logger.debug(f"Broker {broker.__class__.__name__} returned None")
                 except Exception as e:
                     logger.error(f"Broker {broker.__class__.__name__} error: {e}")
 
             # fallback到akshare
             try:
+                logger.debug("Trying AkShare as fallback")
                 fund_info = ak.fund_open_fund_info(fund=fund_code, indicator="基本信息")
                 if not fund_info.empty:
+                    logger.info("Successfully got fund info from AkShare")
                     return FundInfo(
                         fund_code=fund_code,
                         fund_name=fund_info.get("基金名称", fund_code),
@@ -474,13 +470,30 @@ class MarketDataService:
                         nav=float(fund_info.get("单位净值", 0)),
                         establish_date=fund_info.get("成立日期", None),
                     )
+                else:
+                    logger.debug("AkShare returned empty data")
             except Exception as e:
                 logger.error(f"AkShare error: {e}")
 
-            return None
+            # 如果所有数据源都失败，返回一个基本的FundInfo对象
+            logger.warning(f"All data sources failed for fund {fund_code}, returning basic fund info")
+            return FundInfo(
+                fund_code=fund_code,
+                fund_name=f"基金{fund_code}",
+                fund_type="未知",
+                nav=0.0,
+                establish_date=None,
+            )
         except Exception as e:
             logger.error(f"Error getting fund info for {fund_code}: {e}")
-            return None
+            # 即使发生异常，也返回一个基本的FundInfo对象
+            return FundInfo(
+                fund_code=fund_code,
+                fund_name=f"基金{fund_code}",
+                fund_type="未知",
+                nav=0.0,
+                establish_date=None,
+            )
 
     async def get_index_price(self, code: str) -> Optional[MarketData]:
         """获取指数价格"""
@@ -529,16 +542,25 @@ class MarketDataService:
 
     async def get_batch_market_data(self, items: List[tuple]) -> Dict[str, MarketData]:
         """批量获取市场数据"""
-        tasks = []
-        for code, asset_type in items:
-            tasks.append(self.get_market_data(code, asset_type))
-
-        results = await asyncio.gather(*tasks)
-        return {
-            item[0]: result
-            for item, result in zip(items, results)
-            if result is not None
-        }
+        # 批量获取市场数据
+        result_map = {}
+        async with asyncio.TaskGroup() as tg:
+            # 创建任务并存储任务与资产代码的映射
+            task_map = {}
+            for code, asset_type in items:
+                task = tg.create_task(self.get_market_data(code, asset_type))
+                task_map[task] = code
+        
+        # 收集任务结果
+        for task, code in task_map.items():
+            try:
+                result = task.result()
+                if result is not None:
+                    result_map[code] = result
+            except Exception as e:
+                logger.error(f"Error getting market data for {code}: {e}")
+        
+        return result_map
 
     def clear_cache(self):
         """清除缓存"""

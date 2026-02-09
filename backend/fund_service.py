@@ -4,6 +4,7 @@ from typing import List, Optional
 from datetime import datetime
 from backend.models import Fund, Holding, ValuationResult
 from backend.market_data import market_data_service
+from backend.fund_valuation import fund_valuation_service
 
 
 class FundService:
@@ -51,6 +52,12 @@ class FundService:
         return False
     
     async def calculate_valuation(self, fund: Fund) -> ValuationResult:
+        # 使用新的基金估值服务计算估值
+        result = await fund_valuation_service.calculate_fund_valuation(fund.fund_code, fund.nav or 1.0)
+        if result:
+            return result
+        
+        #  fallback到原有计算方法
         holdings_value = {}
         total_value = 0.0
         
