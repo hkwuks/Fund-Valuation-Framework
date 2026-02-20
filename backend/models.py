@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
 
@@ -9,6 +9,20 @@ class AssetType(str, Enum):
     FUND = "fund"
     INDEX = "index"
     BOND = "bond"
+
+
+class MarketType(str, Enum):
+    ON_EXCHANGE = "on_exchange"
+    OFF_EXCHANGE = "off_exchange"
+    UNKNOWN = "unknown"
+
+
+class ValuationType(str, Enum):
+    REAL_TIME_PRICE = "real_time_price"
+    INDEX_BASED = "index_based"
+    HOLDINGS_BASED = "holdings_based"
+    BENCHMARK_ONLY = "benchmark_only"
+    NOT_SUPPORTED = "not_supported"
 
 
 class Holding(BaseModel):
@@ -38,14 +52,22 @@ class FundInfo(BaseModel):
     fund_type: str = Field(..., description="基金类型")
     nav: Optional[float] = Field(None, description="单位净值")
     establish_date: Optional[str] = Field(None, description="成立日期")
+    market_type: MarketType = Field(MarketType.UNKNOWN, description="市场类型(场内/场外)")
+    benchmark: Optional[str] = Field(None, description="业绩比较基准")
+    tracking_index: Optional[str] = Field(None, description="跟踪指数代码")
 
 
 class ValuationResult(BaseModel):
     fund_code: str
     fund_name: str
-    estimated_nav: float
-    total_value: float
-    holdings_value: Dict[str, float]
+    valuation_type: ValuationType = Field(ValuationType.NOT_SUPPORTED, description="估值类型")
+    estimated_nav: Optional[float] = Field(None, description="估算净值")
+    estimated_change_percent: Optional[float] = Field(None, description="估算涨跌幅(%)")
+    previous_nav: Optional[float] = Field(None, description="昨日净值")
+    total_value: float = Field(0.0, description="总价值")
+    holdings_value: Dict[str, float] = Field(default_factory=dict, description="持仓贡献值")
+    benchmark_info: Optional[Dict[str, Any]] = Field(None, description="业绩基准信息")
+    confidence: float = Field(0.0, ge=0.0, le=1.0, description="估值置信度(0-1)")
     timestamp: datetime
 
 

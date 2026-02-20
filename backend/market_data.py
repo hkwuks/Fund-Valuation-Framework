@@ -6,10 +6,63 @@ import re
 import json
 from typing import Dict, Optional, List
 from datetime import datetime
-from backend.models import MarketData, AssetType, FundInfo
+from backend.models import MarketData, AssetType, FundInfo, MarketType
 from loguru import logger
 
 logger.add("./logs/market_data.log", encoding="utf-8")
+
+
+def determine_market_type(fund_code: str, fund_name: str = "", fund_type: str = "") -> MarketType:
+    """
+    判断基金是场内基金还是场外基金
+    
+    判断规则：
+    1. 场内基金代码特征：
+       - 上海交易所：以 50、51、52 开头
+       - 深圳交易所：以 15、16、18 开头
+    2. 场外基金代码特征：
+       - 一般以 0 开头，前两位为 TA 编码
+    3. 基金名称特征：
+       - 包含 ETF、LOF、封闭式 的通常是场内基金
+       - 包含 联接 的通常是场外基金
+    
+    Args:
+        fund_code: 基金代码
+        fund_name: 基金名称（可选，用于辅助判断）
+        fund_type: 基金类型（可选，用于辅助判断）
+    
+    Returns:
+        MarketType: 市场类型枚举值
+    """
+    if not fund_code:
+        return MarketType.UNKNOWN
+    
+    code_prefix = fund_code[:2]
+    
+    if code_prefix in ("50", "51", "52"):
+        return MarketType.ON_EXCHANGE
+    
+    if code_prefix in ("15", "16", "18"):
+        return MarketType.ON_EXCHANGE
+    
+    if fund_name:
+        name_upper = fund_name.upper()
+        if "联接" in fund_name: # 联接应该在前面判断
+            return MarketType.OFF_EXCHANGE
+        if any(kw in name_upper for kw in ["ETF", "LOF", "封闭式"]):
+            return MarketType.ON_EXCHANGE
+        
+    if fund_type:
+        type_upper = fund_type.upper()
+        if "联接" in fund_type: # 联接应该在前面判断
+            return MarketType.OFF_EXCHANGE
+        if any(kw in type_upper for kw in ["ETF", "LOF", "封闭式"]):
+            return MarketType.ON_EXCHANGE
+    
+    if fund_code.startswith("0"):
+        return MarketType.OFF_EXCHANGE
+    
+    return MarketType.UNKNOWN
 
 
 class BaseBrokerAPI:
@@ -94,6 +147,43 @@ class EastMoneyAPI(BaseBrokerAPI):
             logger.error(f"EastMoney fund price API error: {e}")
         return None
 
+    async def _get_fund_detail_info(self, code: str) -> Dict[str, Optional[str]]:
+        """
+        从东方财富基金详情页获取业绩比较基准和跟踪指数
+        
+        Args:
+            code: 基金代码
+            
+        Returns:
+            Dict: 包含 benchmark 和 tracking_index 的字典
+        """
+        result: Dict[str, Optional[str]] = {"benchmark": None, "tracking_index": None}
+        try:
+            url = f"https://fundf10.eastmoney.com/jbgk_{code}.html"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
+                "Connection": "keep-alive"
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5.0)) as response:
+                    if response.status != 200:
+                        return result
+                    content = await response.text()
+                
+                benchmark_match = re.search(r'业绩比较基准.*?<td[^>]*>(.*?)</td>', content, re.DOTALL)
+                if benchmark_match:
+                    result["benchmark"] = benchmark_match.group(1).strip()
+                
+                tracking_match = re.search(r'跟踪标的.*?<td[^>]*>(.*?)</td>', content, re.DOTALL)
+                if tracking_match:
+                    result["tracking_index"] = tracking_match.group(1).strip()
+                    
+        except Exception as e:
+            logger.error(f"EastMoney fund detail API error: {e}")
+        return result
+
     async def get_fund_info(self, code: str) -> Optional[FundInfo]:
         try:
             url = f"https://fund.eastmoney.com/pingzhongdata/{code}.js"
@@ -109,20 +199,15 @@ class EastMoneyAPI(BaseBrokerAPI):
                         logger.warning(f"EastMoney API returned 404 for {url}")
                         return None
                     content = await response.text()
-                # 从JavaScript文件中提取基金信息
                 name_match = re.search(r'var fS_name = "([^"]+)";', content)
                 code_match = re.search(r'var fS_code = "([^"]+)";', content)
-                # 尝试从JavaScript文件中提取基金类型
                 type_match = re.search(r'var fS_type = "([^"]+)";', content)
-                # 从净值趋势中获取最新净值
                 nav_match = re.search(r'var Data_netWorthTrend = \[(.*?)\];', content, re.DOTALL)
                 
                 fund_name = name_match.group(1) if name_match else code
-                # 从接口数据中提取基金类型，如果没有找到则默认为"未知"
                 fund_type = type_match.group(1) if type_match else "未知"
                 
-                # 获取最新净值
-                nav = 0.0
+                nav = None
                 if nav_match:
                     try:
                         nav_data = json.loads("[" + nav_match.group(1) + "]")
@@ -132,12 +217,19 @@ class EastMoneyAPI(BaseBrokerAPI):
                     except Exception as e:
                         logger.error(f"Error parsing nav data: {e}")
 
+                market_type = determine_market_type(code, fund_name, fund_type)
+                
+                detail_info = await self._get_fund_detail_info(code)
+
                 return FundInfo(
                     fund_code=code,
                     fund_name=fund_name,
                     fund_type=fund_type,
                     nav=nav,
                     establish_date=None,
+                    market_type=market_type,
+                    benchmark=detail_info.get("benchmark"),
+                    tracking_index=detail_info.get("tracking_index"),
                 )
         except Exception as e:
             logger.error(f"EastMoney fund info API error: {e}")
@@ -303,12 +395,21 @@ class QQAPI(BaseBrokerAPI):
                     data = await response.json()
                 if data.get("data"):
                     fund_data = data["data"]
+                    fund_name = fund_data.get("fund_name", code)
+                    fund_type = fund_data.get("fundtype", "未知")
+                    market_type = determine_market_type(code, fund_name, fund_type)
+                    
+                    detail_info = await EastMoneyAPI()._get_fund_detail_info(code)
+                    
                     return FundInfo(
                         fund_code=code,
-                        fund_name=fund_data.get("fund_name", code),
-                        fund_type=fund_data.get("fundtype", "未知"),
+                        fund_name=fund_name,
+                        fund_type=fund_type,
                         nav=float(fund_data.get("NAV", 0)),
                         establish_date=fund_data.get("start_date", None),
+                        market_type=market_type,
+                        benchmark=detail_info.get("benchmark"),
+                        tracking_index=detail_info.get("tracking_index"),
                     )
         except Exception as e:
             logger.error(f"QQ fund info API error: {e}")
@@ -341,12 +442,21 @@ class HSBCAPI(BaseBrokerAPI):
                     data = await response.json()
                 if data.get("data"):
                     fund_data = data["data"]
+                    fund_name = fund_data.get("fund_name", code)
+                    fund_type = fund_data.get("fundtype", "未知")
+                    market_type = determine_market_type(code, fund_name, fund_type)
+                    
+                    detail_info = await EastMoneyAPI()._get_fund_detail_info(code)
+                    
                     return FundInfo(
                         fund_code=code,
-                        fund_name=fund_data.get("fund_name", code),
-                        fund_type=fund_data.get("fundtype", "未知"),
+                        fund_name=fund_name,
+                        fund_type=fund_type,
                         nav=float(fund_data.get("NAV", 0)),
                         establish_date=fund_data.get("start_date", None),
+                        market_type=market_type,
+                        benchmark=detail_info.get("benchmark"),
+                        tracking_index=detail_info.get("tracking_index"),
                     )
         except Exception as e:
             logger.error(f"HSBC fund info API error: {e}")
@@ -360,10 +470,15 @@ class MarketDataService:
         self.cache: Dict[str, MarketData] = {}
         self.cache_timeout = 60
         self.brokers = self._init_brokers()
+        self._eastmoney_api = EastMoneyAPI()
 
     def _init_brokers(self) -> List[BaseBrokerAPI]:
         """初始化券商API列表"""
         return [EastMoneyAPI(), SinaAPI(), QQAPI(), HSBCAPI()]
+
+    async def _get_fund_detail_info(self, fund_code: str) -> Dict[str, Optional[str]]:
+        """获取基金详情信息（业绩比较基准、跟踪指数）"""
+        return await self._eastmoney_api._get_fund_detail_info(fund_code)
 
     async def get_stock_price(self, code: str) -> Optional[MarketData]:
         """获取股票价格"""
@@ -420,7 +535,7 @@ class MarketDataService:
                     logger.error(f"Broker {broker.__class__.__name__} error: {e}")
 
             # fallback到akshare
-            fund_etf_hist_df = ak.fund_etf_hist_sina(symbol=code)
+            fund_etf_hist_df = ak.fund_etf_hist_em(symbol=code, period="daily", start_date="20200101", end_date="20991231", adjust="")
             if fund_etf_hist_df.empty:
                 return None
 
@@ -428,12 +543,12 @@ class MarketDataService:
             return MarketData(
                 code=code,
                 name=code,
-                price=float(latest["close"]),
-                change=float(latest["close"] - latest["open"]),
+                price=float(latest["收盘"]),
+                change=float(latest["收盘"] - latest["开盘"]),
                 change_percent=float(
-                    (latest["close"] - latest["open"]) / latest["open"] * 100
+                    (latest["收盘"] - latest["开盘"]) / latest["开盘"] * 100
                 ),
-                volume=float(latest["volume"]),
+                volume=float(latest["成交量"]),
                 timestamp=datetime.now(),
             )
         except Exception as e:
@@ -460,22 +575,35 @@ class MarketDataService:
             # fallback到akshare
             try:
                 logger.debug("Trying AkShare as fallback")
-                fund_info = ak.fund_open_fund_info(fund=fund_code, indicator="基本信息")
+                fund_info = ak.fund_open_fund_info_em(symbol=fund_code, indicator="单位净值走势")
                 if not fund_info.empty:
                     logger.info("Successfully got fund info from AkShare")
+                    fund_name = fund_code
+                    fund_type = "未知"
+                    market_type = determine_market_type(fund_code, fund_name, fund_type)
+                    
+                    latest_nav = None
+                    if len(fund_info) > 0:
+                        latest_row = fund_info.iloc[-1]
+                        latest_nav = float(latest_row.get("单位净值", 0)) if "单位净值" in latest_row else None
+                    
+                    detail_info = await self._get_fund_detail_info(fund_code)
+                    
                     return FundInfo(
                         fund_code=fund_code,
-                        fund_name=fund_info.get("基金名称", fund_code),
-                        fund_type=fund_info.get("基金类型", "未知"),
-                        nav=float(fund_info.get("单位净值", 0)),
-                        establish_date=fund_info.get("成立日期", None),
+                        fund_name=fund_name,
+                        fund_type=fund_type,
+                        nav=latest_nav,
+                        establish_date=None,
+                        market_type=market_type,
+                        benchmark=detail_info.get("benchmark"),
+                        tracking_index=detail_info.get("tracking_index"),
                     )
                 else:
                     logger.debug("AkShare returned empty data")
             except Exception as e:
                 logger.error(f"AkShare error: {e}")
 
-            # 如果所有数据源都失败，返回一个基本的FundInfo对象
             logger.warning(f"All data sources failed for fund {fund_code}, returning basic fund info")
             return FundInfo(
                 fund_code=fund_code,
@@ -483,22 +611,27 @@ class MarketDataService:
                 fund_type="未知",
                 nav=0.0,
                 establish_date=None,
+                market_type=determine_market_type(fund_code),
+                benchmark=None,
+                tracking_index=None,
             )
         except Exception as e:
             logger.error(f"Error getting fund info for {fund_code}: {e}")
-            # 即使发生异常，也返回一个基本的FundInfo对象
             return FundInfo(
                 fund_code=fund_code,
                 fund_name=f"基金{fund_code}",
                 fund_type="未知",
                 nav=0.0,
                 establish_date=None,
+                market_type=determine_market_type(fund_code),
+                benchmark=None,
+                tracking_index=None,
             )
 
     async def get_index_price(self, code: str) -> Optional[MarketData]:
         """获取指数价格"""
         try:
-            index_stock_hist_df = ak.index_stock_hist(symbol=code, period="daily")
+            index_stock_hist_df = ak.index_zh_a_hist(symbol=code, period="daily", start_date="20200101", end_date="20991231")
             if index_stock_hist_df.empty:
                 return None
 
@@ -576,13 +709,15 @@ async def get_fund_info(fund_code: str) -> Optional[FundInfo]:
         result = await market_data_service.get_fund_info(fund_code)
         if result:
             return result
-        # 如果所有API都失败，返回一个基本的FundInfo对象
         return FundInfo(
             fund_code=fund_code,
             fund_name=f"基金{fund_code}",
             fund_type="未知",
             nav=0.0,
             establish_date=None,
+            market_type=determine_market_type(fund_code),
+            benchmark=None,
+            tracking_index=None,
         )
     except Exception as e:
         logger.error(f"Error in get_fund_info: {e}")
@@ -592,4 +727,7 @@ async def get_fund_info(fund_code: str) -> Optional[FundInfo]:
             fund_type="未知",
             nav=0.0,
             establish_date=None,
+            market_type=determine_market_type(fund_code),
+            benchmark=None,
+            tracking_index=None,
         )

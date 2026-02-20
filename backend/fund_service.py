@@ -2,8 +2,7 @@ import json
 import os
 from typing import List, Optional
 from datetime import datetime
-from backend.models import Fund, Holding, ValuationResult
-from backend.market_data import market_data_service
+from backend.models import Fund, Holding, ValuationResult, ValuationType
 from backend.fund_valuation import fund_valuation_service
 
 
@@ -52,35 +51,24 @@ class FundService:
         return False
     
     async def calculate_valuation(self, fund: Fund) -> ValuationResult:
-        # 使用新的基金估值服务计算估值
-        result = await fund_valuation_service.calculate_fund_valuation(fund.fund_code, fund.nav or 1.0)
+        result = await fund_valuation_service.calculate_fund_valuation(
+            fund.fund_code, 
+            fund.nav
+        )
         if result:
             return result
-        
-        #  fallback到原有计算方法
-        holdings_value = {}
-        total_value = 0.0
-        
-        items = [(holding.asset_code, holding.asset_type) for holding in fund.holdings]
-        market_data = await market_data_service.get_batch_market_data(items)
-        
-        for holding in fund.holdings:
-            data = market_data.get(holding.asset_code)
-            if data:
-                value = holding.quantity * data.price
-                holdings_value[holding.asset_code] = value
-                total_value += value
-            else:
-                holdings_value[holding.asset_code] = 0.0
-        
-        estimated_nav = total_value / fund.total_shares if fund.total_shares > 0 else 0.0
         
         return ValuationResult(
             fund_code=fund.fund_code,
             fund_name=fund.fund_name,
-            estimated_nav=estimated_nav,
-            total_value=total_value,
-            holdings_value=holdings_value,
+            valuation_type=ValuationType.NOT_SUPPORTED,
+            estimated_nav=fund.nav,
+            estimated_change_percent=None,
+            previous_nav=fund.nav,
+            total_value=fund.nav or 0.0,
+            holdings_value={},
+            benchmark_info=None,
+            confidence=0.0,
             timestamp=datetime.now()
         )
     
