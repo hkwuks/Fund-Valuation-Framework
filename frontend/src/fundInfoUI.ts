@@ -1,5 +1,5 @@
 import { api } from './api';
-import { FundInfo, Holding } from './types';
+import { FundData, Holding } from './types';
 
 export const fundInfoUI = {
   init(container: HTMLDivElement) {
@@ -31,7 +31,7 @@ export const fundInfoUI = {
       searchBtn.addEventListener('click', () => {
         const fundCode = fundCodeInput.value.trim();
         if (fundCode) {
-          this.loadFundInfo(fundCode);
+          this.loadFundData(fundCode);
         }
       });
 
@@ -39,14 +39,14 @@ export const fundInfoUI = {
         if (e.key === 'Enter') {
           const fundCode = fundCodeInput.value.trim();
           if (fundCode) {
-            this.loadFundInfo(fundCode);
+            this.loadFundData(fundCode);
           }
         }
       });
     }
   },
 
-  async loadFundInfo(fundCode: string) {
+  async loadFundData(fundCode: string) {
     const contentDiv = document.getElementById('fund-info-content');
     if (!contentDiv) return;
 
@@ -59,13 +59,13 @@ export const fundInfoUI = {
 
     try {
       // 并行请求所有数据
-      const [fundInfo, holdings, navHistory] = await Promise.all([
-        api.queryFundInfo(fundCode),
+      const [fundData, holdings, navHistory] = await Promise.all([
+        api.getFundData(fundCode),
         api.getFundHoldings(fundCode),
         api.getFundNavHistory(fundCode)
       ]);
 
-      if (!fundInfo) {
+      if (!fundData) {
         contentDiv.innerHTML = `
           <div class="error-state">
             <p>未找到基金信息</p>
@@ -75,7 +75,7 @@ export const fundInfoUI = {
       }
 
       // 渲染基金信息
-      this.renderFundInfo(fundInfo, holdings, navHistory);
+      this.renderFundInfo(fundData, holdings, navHistory);
     } catch (error) {
       console.error('加载基金信息失败', error);
       contentDiv.innerHTML = `
@@ -86,15 +86,15 @@ export const fundInfoUI = {
     }
   },
 
-  renderFundInfo(fundInfo: FundInfo, holdings: any[], navHistory: any) {
+  renderFundInfo(fundData: FundData, holdings: any[], navHistory: any) {
     const contentDiv = document.getElementById('fund-info-content');
     if (!contentDiv) return;
 
     contentDiv.innerHTML = `
       <div class="fund-details">
         <div class="fund-header">
-          <h3>${fundInfo.fund_name} (${fundInfo.fund_code})</h3>
-          <div class="fund-type">${fundInfo.fund_type}</div>
+          <h3>${fundData.fund_name} (${fundData.fund_code})</h3>
+          <div class="fund-type">${fundData.fund_type}</div>
         </div>
 
         <!-- 基金基本信息 -->
@@ -103,27 +103,27 @@ export const fundInfoUI = {
           <div class="info-grid">
             <div class="info-item">
               <span class="label">基金类型:</span>
-              <span class="value">${fundInfo.fund_type}</span>
+              <span class="value">${fundData.fund_type}</span>
             </div>
             <div class="info-item">
               <span class="label">最新净值:</span>
-              <span class="value">${fundInfo.nav ? fundInfo.nav.toFixed(4) : '暂无数据'}</span>
+              <span class="value">${fundData.nav ? fundData.nav.toFixed(4) : '暂无数据'}</span>
             </div>
             <div class="info-item">
               <span class="label">成立日期:</span>
-              <span class="value">${fundInfo.establish_date || '暂无数据'}</span>
+              <span class="value">${fundData.establish_date || '暂无数据'}</span>
             </div>
             <div class="info-item">
               <span class="label">市场类型:</span>
-              <span class="value">${this.getMarketTypeText(fundInfo.market_type)}</span>
+              <span class="value">${this.getMarketTypeText(fundData.market_type)}</span>
             </div>
             <div class="info-item">
               <span class="label">业绩比较基准:</span>
-              <span class="value">${fundInfo.benchmark || '暂无数据'}</span>
+              <span class="value">${fundData.benchmark || '暂无数据'}</span>
             </div>
             <div class="info-item">
               <span class="label">跟踪指数:</span>
-              <span class="value">${fundInfo.tracking_index || '暂无数据'}</span>
+              <span class="value">${fundData.tracking_index || '暂无数据'}</span>
             </div>
           </div>
         </div>

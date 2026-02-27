@@ -1,8 +1,7 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, Body
 from typing import List, Dict, Any
 import json
 import os
-from backend.models import FundInfo
 from backend.market_data import market_data_service
 from loguru import logger
 
@@ -73,7 +72,7 @@ async def get_funds():
 
 
 @router.post(
-    "",
+    "/add",
     summary="添加基金",
     description="添加新基金到基金列表"
 )
@@ -212,12 +211,48 @@ async def update_fund(fund_code: str, fund: Dict[str, Any] = Body(...)):
         }
 
 
+@router.post(
+    "/batch",
+    summary="批量获取基金信息",
+    description="根据基金代码列表批量获取基金详细信息"
+)
+async def get_fund_data_batch(fund_codes: List[str] = Body(...)):
+    """
+    批量获取基金信息
+    
+    - **fund_codes**: 基金代码列表
+    """
+    try:
+        fund_datas = []
+        
+        for fund_code in fund_codes:
+            try:
+                fund_data = await market_data_service.get_fund_data(fund_code)
+                if fund_data:
+                    fund_datas.append(fund_data.model_dump())
+            except Exception as e:
+                logger.error(f"获取基金 {fund_code} 信息失败: {e}")
+        
+        return {
+            "success": True,
+            "message": "批量获取成功",
+            "data": fund_datas
+        }
+    except Exception as e:
+        logger.error(f"批量获取基金信息失败: {e}")
+        return {
+            "success": False,
+            "message": f"批量获取基金信息失败: {str(e)}",
+            "data": []
+        }
+
+
 @router.get(
     "/query/{fund_code}",
     summary="查询基金信息",
     description="根据基金代码查询基金详细信息（从外部数据源获取）"
 )
-async def query_fund_info(fund_code: str):
+async def query_fund_data(fund_code: str):
     """
     查询基金信息
     
@@ -225,13 +260,13 @@ async def query_fund_info(fund_code: str):
     """
     try:
         # 使用market_data_service从外部数据源获取基金信息
-        fund_info = await market_data_service.get_fund_info(fund_code)
+        fund_data = await market_data_service.get_fund_data(fund_code)
         
-        if fund_info:
+        if fund_data:
             return {
                 "success": True,
                 "message": "查询成功",
-                "data": fund_info.model_dump()
+                "data": fund_data.model_dump()
             }
         else:
             return {
@@ -269,6 +304,15 @@ async def get_fund(fund_code: str):
                     "message": "获取成功",
                     "data": fund
                 }
+        
+        fund_data = await market_data_service.get_fund_data(fund_code)
+        
+        if fund_data:
+            return {
+                "success": True,
+                "message": "获取成功",
+                "data": fund_data.model_dump()
+            }
         
         # 基金不存在
         return {

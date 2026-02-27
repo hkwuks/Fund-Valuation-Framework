@@ -20,21 +20,29 @@ export interface Fund {
   fund_type: string;
   total_shares: number;
   nav?: number;
+  previous_nav?: number;
   holdings: Holding[];
   estimated_nav?: number;
   estimated_change_percent?: number;
   last_update?: string;
 }
 
-export interface FundInfo {
+export interface FundData {
   fund_code: string;
   fund_name: string;
   fund_type: string;
   nav?: number;
+  nav_date?: string;
+  previous_nav?: number;
   establish_date?: string;
   market_type: MarketType;
   benchmark?: string;
   tracking_index?: string;
+  price?: number;
+  change?: number;
+  change_percent?: number;
+  volume?: number;
+  timestamp?: string;
 }
 
 export interface ValuationResult {
@@ -44,6 +52,8 @@ export interface ValuationResult {
   estimated_nav?: number;
   estimated_change_percent?: number;
   previous_nav?: number;
+  latest_nav?: number;
+  nav_date?: string;
   total_value: number;
   holdings_value: Record<string, { weight: number; change_percent: number; contribution: number }>;
   benchmark_info?: Record<string, any>;

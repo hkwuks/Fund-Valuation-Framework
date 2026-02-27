@@ -46,26 +46,21 @@ class Fund(BaseModel):
     last_update: Optional[datetime] = Field(None, description="最后更新时间")
 
 
-class FundInfo(BaseModel):
-    fund_code: str = Field(..., description="基金代码")
-    fund_name: str = Field(..., description="基金名称")
-    fund_type: str = Field(..., description="基金类型")
-    nav: Optional[float] = Field(None, description="单位净值")
-    establish_date: Optional[str] = Field(None, description="成立日期")
-    market_type: MarketType = Field(MarketType.UNKNOWN, description="市场类型(场内/场外)")
-    benchmark: Optional[str] = Field(None, description="业绩比较基准")
-    tracking_index: Optional[str] = Field(None, description="跟踪指数代码")
-
-
 class ValuationResult(BaseModel):
     fund_code: str
     fund_name: str
-    valuation_type: ValuationType = Field(ValuationType.NOT_SUPPORTED, description="估值类型")
+    valuation_type: ValuationType = Field(
+        ValuationType.NOT_SUPPORTED, description="估值类型"
+    )
     estimated_nav: Optional[float] = Field(None, description="估算净值")
     estimated_change_percent: Optional[float] = Field(None, description="估算涨跌幅(%)")
     previous_nav: Optional[float] = Field(None, description="昨日净值")
+    latest_nav: Optional[float] = Field(None, description="最新净值")
+    nav_date: Optional[str] = Field(None, description="净值日期(YYYY-MM-DD)")
     total_value: float = Field(0.0, description="总价值")
-    holdings_value: Dict[str, Any] = Field(default_factory=dict, description="持仓贡献值")
+    holdings_value: Dict[str, Any] = Field(
+        default_factory=dict, description="持仓贡献值"
+    )
     benchmark_info: Optional[Dict[str, Any]] = Field(None, description="业绩基准信息")
     confidence: float = Field(0.0, ge=0.0, le=1.0, description="估值置信度(0-1)")
     confidence_note: Optional[str] = Field(None, description="置信度说明")
@@ -80,6 +75,26 @@ class MarketData(BaseModel):
     change_percent: Optional[float] = None
     volume: Optional[float] = None
     timestamp: datetime
+
+
+class FundData(BaseModel):
+    fund_code: str = Field(..., description="基金代码")
+    fund_name: str = Field(..., description="基金名称")
+    fund_type: str = Field(..., description="基金类型")
+    nav: Optional[float] = Field(None, description="单位净值")
+    nav_date: Optional[str] = Field(None, description="净值日期(YYYY-MM-DD)")
+    previous_nav: Optional[float] = Field(None, description="昨日净值")
+    establish_date: Optional[str] = Field(None, description="成立日期")
+    market_type: MarketType = Field(
+        MarketType.UNKNOWN, description="市场类型(场内/场外)"
+    )
+    benchmark: Optional[str] = Field(None, description="业绩比较基准")
+    tracking_index: Optional[str] = Field(None, description="跟踪指数代码")
+    price: Optional[float] = Field(None, description="当前价格")
+    change: Optional[float] = Field(None, description="涨跌额")
+    change_percent: Optional[float] = Field(None, description="涨跌幅(%)")
+    volume: Optional[float] = Field(None, description="成交量")
+    timestamp: Optional[datetime] = Field(None, description="数据时间戳")
 
 
 class FundListResponse(BaseModel):

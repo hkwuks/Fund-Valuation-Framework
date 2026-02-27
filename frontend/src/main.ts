@@ -25,9 +25,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 
 // 初始化界面
 async function initApp() {
-  // 初始化基金管理界面
+  // 初始化基金管理界面（不等待完成，避免阻塞其他界面）
   const fundManagerContainer = document.querySelector<HTMLDivElement>('#fund-manager-container')!
-  await fundManagerUI.init(fundManagerContainer)
+  fundManagerUI.init(fundManagerContainer).catch(console.error)
 
   // 初始化基金估值界面
   const valuationContainer = document.querySelector<HTMLDivElement>('#valuation-container')!

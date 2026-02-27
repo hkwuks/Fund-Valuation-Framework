@@ -2,6 +2,8 @@ import type { Fund } from './types';
 
 export class StorageService {
   private static readonly FUNDS_KEY = 'fund_valuation_funds';
+  private static readonly REFRESH_INTERVAL_KEY = 'fund_valuation_refresh_interval';
+  private static readonly DEFAULT_REFRESH_INTERVAL = 60000; // 默认1分钟
 
   // 保存基金数据到本地存储
   static saveFunds(funds: Fund[]): void {
@@ -49,5 +51,21 @@ export class StorageService {
       console.error('从文件加载基金数据失败:', error);
       return [];
     }
+  }
+
+  // 保存刷新间隔到本地存储
+  static saveRefreshInterval(interval: number): void {
+    localStorage.setItem(this.REFRESH_INTERVAL_KEY, interval.toString());
+  }
+
+  // 从本地存储加载刷新间隔
+  static loadRefreshInterval(): number {
+    const data = localStorage.getItem(this.REFRESH_INTERVAL_KEY);
+    return data ? parseInt(data, 10) : this.DEFAULT_REFRESH_INTERVAL;
+  }
+
+  // 清除刷新间隔设置
+  static clearRefreshInterval(): void {
+    localStorage.removeItem(this.REFRESH_INTERVAL_KEY);
   }
 }

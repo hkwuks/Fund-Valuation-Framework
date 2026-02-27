@@ -1,22 +1,65 @@
-import type { Fund, ValuationResult, MarketData, FundInfo } from './types';
+import type { Fund, ValuationResult, MarketData, FundData } from './types';
 
 const API_BASE = '/api';
 
 class ApiService {
-  async request<T>(url: string, options?: RequestInit): Promise<T> {
-    const response = await fetch(`${API_BASE}${url}`, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
-      ...options,
-    });
+  private abortController: AbortController | null = null;
+  private requestCount: number = 0;
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+  constructor() {
+    this.setupPageUnloadHandler();
+  }
+
+  private setupPageUnloadHandler(): void {
+    const cancelAllRequests = () => {
+      this.cancelAllRequests();
+    };
+
+    window.addEventListener('beforeunload', cancelAllRequests);
+    window.addEventListener('pagehide', cancelAllRequests);
+  }
+
+  private createAbortController(): AbortController {
+    if (!this.abortController || this.abortController.signal.aborted) {
+      this.abortController = new AbortController();
+      this.requestCount = 0;
     }
+    this.requestCount++;
+    return this.abortController;
+  }
 
-    return response.json();
+  cancelAllRequests(): void {
+    if (this.abortController && !this.abortController.signal.aborted) {
+      this.abortController.abort();
+      console.log(`已取消 ${this.requestCount} 个进行中的请求`);
+    }
+  }
+
+  async request<T>(url: string, options?: RequestInit): Promise<T> {
+    const controller = this.createAbortController();
+    
+    try {
+      const response = await fetch(`${API_BASE}${url}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...options?.headers,
+        },
+        ...options,
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      return response.json();
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log(`请求已取消: ${API_BASE}${url}`);
+        throw new Error('请求已取消');
+      }
+      throw error;
+    }
   }
 
   // 基金管理相关 API
@@ -29,7 +72,7 @@ class ApiService {
   }
 
   async addFund(fund: Fund): Promise<{ success: boolean; message: string }> {
-    return this.request<{ success: boolean; message: string }>('/funds', {
+    return this.request<{ success: boolean; message: string }>('/funds/add', {
       method: 'POST',
       body: JSON.stringify(fund),
     });
@@ -55,26 +98,26 @@ class ApiService {
   }
 
   // 基金信息相关 API
-  async getFundInfo(fundCode: string): Promise<FundInfo> {
-    const response = await this.request<{ success: boolean; data: FundInfo }>(`/funds/${fundCode}`);
+  async getFundData(fundCode: string): Promise<FundData> {
+    const response = await this.request<{ success: boolean; data: FundData }>(`/funds/${fundCode}`);
     if (!response.success) {
-      throw new Error(response.message || 'Failed to get fund info');
+      throw new Error(response.message || 'Failed to get fund data');
     }
     return response.data;
   }
 
-  async getFundInfoBatch(fundCodes: string[]): Promise<{ success: boolean; data: FundInfo[] }> {
-    return this.request<{ success: boolean; data: FundInfo[] }>('/funds/batch', {
+  async getFundDataBatch(fundCodes: string[]): Promise<{ success: boolean; data: FundData[] }> {
+    return this.request<{ success: boolean; data: FundData[] }>('/funds/batch', {
       method: 'POST',
       body: JSON.stringify(fundCodes),
     });
   }
 
   // 查询基金信息（从外部数据源获取）
-  async queryFundInfo(fundCode: string): Promise<FundInfo> {
-    const response = await this.request<{ success: boolean; message?: string; data: FundInfo }>(`/funds/query/${fundCode}`);
+  async queryFundData(fundCode: string): Promise<FundData> {
+    const response = await this.request<{ success: boolean; message?: string; data: FundData }>(`/funds/query/${fundCode}`);
     if (!response.success) {
-      throw new Error(response.message || 'Failed to query fund info');
+      throw new Error(response.message || 'Failed to query fund data');
     }
     return response.data;
   }
@@ -99,11 +142,17 @@ class ApiService {
   }
 
   async getFundValuationBatch(fundCodes: string[], preferHoldings: boolean = true): Promise<ValuationResult[]> {
-    const response = await this.request<{ success: boolean; data: ValuationResult[] }>('/valuation/batch', {
-      method: 'POST',
-      body: JSON.stringify({ fund_codes: fundCodes, prefer_holdings: preferHoldings }),
-    });
-    return response.success ? response.data : [];
+    try {
+      const response = await this.request<{ success: boolean; data: ValuationResult[] }>('/valuation/batch', {
+        method: 'POST',
+        body: JSON.stringify({ fund_codes: fundCodes, prefer_holdings: preferHoldings }),
+      });
+      console.log('估值批量请求返回:', response);
+      return response.success ? response.data : [];
+    } catch (error) {
+      console.error('批量获取估值失败:', error);
+      return [];
+    }
   }
 
   async getFundValuationDetail(fundCode: string): Promise<{ success: boolean; data: any }> {

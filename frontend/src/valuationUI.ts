@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { ValuationResult, FundInfo } from './types';
+import type { ValuationResult, FundData } from './types';
 
 interface ValuationHistoryItem {
   fundCode: string;
@@ -98,8 +98,8 @@ class ValuationUI {
 
     try {
       // 获取基金信息
-      const fundInfo = await api.getFundInfo(fundCode);
-      if (!fundInfo) {
+      const fundData = await api.getFundData(fundCode);
+      if (!fundData) {
         resultContainer.innerHTML = `<div class="error-message">未找到基金代码: ${fundCode}</div>`;
         return;
       }
