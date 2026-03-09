@@ -21,6 +21,8 @@ class ValuationType(str, Enum):
     REAL_TIME_PRICE = "real_time_price"
     INDEX_BASED = "index_based"
     HOLDINGS_BASED = "holdings_based"
+    HYBRID_BOND = "hybrid_bond"  # 偏债混合/二级债基
+    HYBRID_QDII = "hybrid_qdii"  # 主动管理型 QDII（持仓 + 指数混合）
     BENCHMARK_ONLY = "benchmark_only"
     NOT_SUPPORTED = "not_supported"
 
@@ -64,6 +66,7 @@ class ValuationResult(BaseModel):
     benchmark_info: Optional[Dict[str, Any]] = Field(None, description="业绩基准信息")
     confidence: float = Field(0.0, ge=0.0, le=1.0, description="估值置信度(0-1)")
     confidence_note: Optional[str] = Field(None, description="置信度说明")
+    valuation_method: Optional[str] = Field(None, description="估值方法说明")
     timestamp: datetime
 
 

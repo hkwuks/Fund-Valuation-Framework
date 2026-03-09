@@ -2,7 +2,18 @@ export type AssetType = 'stock' | 'fund' | 'index' | 'bond';
 
 export type MarketType = 'on_exchange' | 'off_exchange' | 'unknown';
 
-export type ValuationType = 'real_time_price' | 'index_based' | 'holdings_based' | 'benchmark_only' | 'not_supported';
+export type ValuationType = 'real_time_price' | 'index_based' | 'holdings_based' | 'hybrid_bond' | 'hybrid_qdii' | 'benchmark_only' | 'not_supported';
+
+// 估值方法显示名称
+export const ValuationMethodNames: Record<string, string> = {
+  'real_time_price': '实时价格估值',
+  'index_based': '指数估值',
+  'holdings_based': '持仓估值',
+  'hybrid_bond': '混合估值（债券 + 股票）',
+  'hybrid_qdii': '混合估值（持仓 + 指数）',
+  'benchmark_only': '业绩基准参考',
+  'not_supported': '暂不支持',
+};
 
 export interface Holding {
   asset_code: string;
@@ -20,11 +31,14 @@ export interface Fund {
   fund_type: string;
   total_shares: number;
   nav?: number;
+  nav_date?: string;  // 最新净值日期
   previous_nav?: number;
   holdings: Holding[];
   estimated_nav?: number;
   estimated_change_percent?: number;
   last_update?: string;
+  confidence_note?: string;  // 估值说明
+  valuation_method?: string;  // 估值方法
 }
 
 export interface FundData {
@@ -49,6 +63,7 @@ export interface ValuationResult {
   fund_code: string;
   fund_name: string;
   valuation_type: ValuationType;
+  valuation_method?: string;  // 估值方法说明
   estimated_nav?: number;
   estimated_change_percent?: number;
   previous_nav?: number;

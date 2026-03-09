@@ -155,6 +155,103 @@ class ApiService {
     }
   }
 
+  /**
+   * 流式批量估值 - 每个基金估值完成后立即回调
+   * @param fundCodes 基金代码列表
+   * @param onValuation 单个基金估值完成回调
+   * @param onProgress 进度更新回调
+   * @param onComplete 全部完成回调
+   * @param onError 错误回调
+   * @param preferHoldings 是否优先使用持仓估值
+   */
+  async getFundValuationBatchStream(
+    fundCodes: string[],
+    callbacks: {
+      onValuation?: (result: ValuationResult) => void;
+      onProgress?: (progress: { current: number; total: number; percent: number; successCount: number; failedCount: number }) => void;
+      onComplete?: (summary: { total: number; successCount: number; failedCount: number }) => void;
+      onError?: (fundCode: string, message: string) => void;
+    },
+    preferHoldings: boolean = true
+  ): Promise<void> {
+    try {
+      const response = await fetch(`${API_BASE}/valuation/batch/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fund_codes: fundCodes, prefer_holdings: preferHoldings }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('无法获取响应流');
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+
+          // 解析 SSE 事件
+          const eventMatch = line.match(/^event:\s*(\w+)\ndata:\s*(.+)$/s);
+          if (!eventMatch) continue;
+
+          const [, eventType, dataStr] = eventMatch;
+          const data = JSON.parse(dataStr);
+
+          switch (eventType) {
+            case 'valuation':
+              if (data.success && data.data) {
+                callbacks.onValuation?.(data.data as ValuationResult);
+              } else if (!data.success) {
+                callbacks.onError?.(data.fund_code, data.message);
+              }
+              break;
+
+            case 'progress':
+              if (data.type === 'progress') {
+                callbacks.onProgress?.({
+                  current: data.current,
+                  total: data.total,
+                  percent: data.percent,
+                  successCount: data.success_count,
+                  failedCount: data.failed_count,
+                });
+              }
+              break;
+
+            case 'complete':
+              callbacks.onComplete?.({
+                total: data.total,
+                successCount: data.success_count,
+                failedCount: data.failed_count,
+              });
+              break;
+
+            case 'error':
+              callbacks.onError?.(data.fund_code, data.message);
+              break;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('流式估值失败:', error);
+      throw error;
+    }
+  }
+
   async getFundValuationDetail(fundCode: string): Promise<{ success: boolean; data: any }> {
     return this.request<{ success: boolean; data: any }>(`/valuation/${fundCode}/detail`);
   }

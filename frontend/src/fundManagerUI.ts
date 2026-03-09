@@ -6,153 +6,254 @@ import type { Fund } from './types';
 
 class FundManagerUI {
   private container: HTMLElement | null = null;
-  private eventsBound: boolean = false;
   private refreshInterval: number | null = null;
   private refreshIntervalMs: number = 60000;
   private sortDirection: 'asc' | 'desc' | null = null;
+  private isInitialized = false;
+  private isValuationLoading = false; // 估值加载中标志
   private static readonly REFRESH_INTERVAL_OPTIONS = [
-    { value: 30000, label: '30秒' },
-    { value: 60000, label: '1分钟' },
-    { value: 120000, label: '2分钟' },
-    { value: 300000, label: '5分钟' },
-    { value: 600000, label: '10分钟' }
+    { value: 30000, label: '30 秒' },
+    { value: 60000, label: '1 分钟' },
+    { value: 120000, label: '2 分钟' },
+    { value: 300000, label: '5 分钟' },
+    { value: 600000, label: '10 分钟' }
   ];
 
   async init(container: HTMLElement): Promise<void> {
+    if (this.isInitialized) return;
+
     this.container = container;
     this.refreshIntervalMs = StorageService.loadRefreshInterval();
+
     await fundManager.init();
     await this.render();
-    this.bindEventsOnce();
-    await this.refreshValuations();
+    this.bindEvents();
+
+    // 开始刷新估值（实时更新 UI）
+    await this.refreshValuations(false);
+
     this.startAutoRefresh();
+    this.isInitialized = true;
   }
 
   async render(): Promise<void> {
     if (!this.container) return;
 
     const funds = this.getSortedFunds();
+    const totalValue = this.calculateTotalValue(funds);
+    const totalProfit = this.calculateTotalProfit(funds);
 
     this.container.innerHTML = `
-      <div class="fund-manager">
-        <h2>基金管理</h2>
-        
-        <div class="fund-form">
-          <h3>添加基金</h3>
-          <form id="add-fund-form">
-            <div class="form-group">
-              <label for="fund-code">基金代码:</label>
-              <div style="display: flex; gap: 8px;">
-                <input type="text" id="fund-code" required style="flex: 1;">
-                <button type="button" id="query-fund-btn" style="white-space: nowrap;">查询</button>
+      <div class="fund-manager fade-in">
+        <!-- 添加基金卡片 -->
+        <div class="card fund-form">
+          <div class="card-header">
+            <h3 class="card-title">
+              <span class="card-title-icon">➕</span>
+              添加基金
+            </h3>
+          </div>
+          <div class="card-body">
+            <form id="add-fund-form">
+              <div class="form-group">
+                <label for="fund-code">基金代码</label>
+                <div style="display: flex; gap: 8px;">
+                  <input type="text" id="fund-code" required style="flex: 1;" placeholder="例如：000001" />
+                  <button type="button" id="query-fund-btn" class="btn btn-secondary">查询</button>
+                </div>
               </div>
-            </div>
-            <div class="form-group">
-              <label for="fund-name">基金名称:</label>
-              <input type="text" id="fund-name" required>
-            </div>
-            <div class="form-group">
-              <label for="fund-type">基金类型:</label>
-              <input type="text" id="fund-type" required>
-            </div>
-            <div class="form-group">
-              <label for="total-shares">持有份额:</label>
-              <input type="number" id="total-shares" step="0.001" value="1" required>
-            </div>
-            <button type="submit">添加基金</button>
-          </form>
+              <div class="form-group">
+                <label for="fund-name">基金名称</label>
+                <input type="text" id="fund-name" required placeholder="自动填充或手动输入" />
+              </div>
+              <div class="form-group">
+                <label for="fund-type">基金类型</label>
+                <input type="text" id="fund-type" required placeholder="例如：股票型、混合型" />
+              </div>
+              <div class="form-group">
+                <label for="total-shares">持有份额</label>
+                <input type="number" id="total-shares" step="0.001" value="1" required />
+              </div>
+              <button type="submit" class="btn btn-primary btn-lg">
+                <span>➕</span> 添加基金
+              </button>
+            </form>
+          </div>
         </div>
 
-        <div class="fund-list">
+        <!-- 基金列表卡片 -->
+        <div class="card fund-list">
           <div class="fund-list-header">
-            <h3>基金列表 <span class="refresh-info">(每${this.formatRefreshInterval(this.refreshIntervalMs)}自动刷新估值)</span></h3>
+            <h3>
+              <span class="card-title-icon">📦</span>
+              基金列表
+              <span class="refresh-info">· 每${this.formatRefreshInterval(this.refreshIntervalMs)}自动刷新</span>
+            </h3>
             <div class="fund-list-controls">
               <select id="refresh-interval-select" class="refresh-interval-select">
                 ${FundManagerUI.REFRESH_INTERVAL_OPTIONS.map(option => `
                   <option value="${option.value}" ${this.refreshIntervalMs === option.value ? 'selected' : ''}>${option.label}</option>
                 `).join('')}
               </select>
-              <button type="button" id="refresh-all-btn" class="refresh-btn">刷新数据</button>
+              <button type="button" id="refresh-all-btn" class="refresh-btn btn btn-primary">
+                🔄 刷新数据
+              </button>
             </div>
           </div>
+
           ${funds.length > 0 ? `
-            <table>
-              <thead>
-                <tr>
-                  <th>基金代码</th>
-                  <th>基金名称</th>
-                  <th>基金类型</th>
-                  <th>持有份额</th>
-                  <th>昨日净值</th>
-                  <th>最新净值</th>
-                  <th>预估净值</th>
-                  <th class="sortable-header" id="sort-change-percent" style="cursor: pointer; user-select: none;">
-                    预估涨跌幅
-                    <span class="sort-icons">
-                      <span class="sort-icon ${this.sortDirection === 'asc' ? 'active' : ''}">▲</span>
-                      <span class="sort-icon ${this.sortDirection === 'desc' ? 'active' : ''}">▼</span>
-                    </span>
-                  </th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${funds.map(fund => `
+            <!-- 资产概览 -->
+            <div class="valuation-body mb-3" style="margin-top: 20px;">
+              <div class="valuation-item">
+                <span class="label">持有基金数</span>
+                <span class="value">${funds.length} 只</span>
+              </div>
+              <div class="valuation-item">
+                <span class="label">持仓总份额</span>
+                <span class="value">${this.formatNumber(funds.reduce((sum, f) => sum + f.total_shares, 0))}</span>
+              </div>
+              <div class="valuation-item">
+                <span class="label">预估总市值</span>
+                <span class="value">${totalValue !== '-' ? totalValue : '-'}</span>
+              </div>
+              <div class="valuation-item">
+                <span class="label">日盈亏估算</span>
+                <span class="value ${totalProfit !== '-' && totalProfit !== '0.00' ? (parseFloat(totalProfit.replace(',', '')) >= 0 ? 'positive' : 'negative') : ''}">
+                  ${totalProfit !== '-' ? (parseFloat(totalProfit.replace(',', '')) >= 0 ? '+' : '') + totalProfit : '-'}
+                </span>
+              </div>
+            </div>
+
+            <div class="table-container mt-3">
+              <table>
+                <thead>
                   <tr>
-                    <td>${fund.fund_code}</td>
-                    <td>${fund.fund_name}</td>
-                    <td>${fund.fund_type}</td>
-                    <td>${fund.total_shares}</td>
-                    <td>${fund.previous_nav ? fund.previous_nav.toFixed(4) : '-'}</td>
-                    <td>${fund.nav ? fund.nav.toFixed(4) : '-'}</td>
-                    <td>${fund.estimated_nav ? fund.estimated_nav.toFixed(4) : '-'}</td>
-                    <td class="${fund.estimated_change_percent != null && fund.estimated_change_percent >= 0 ? 'positive' : 'negative'}">
-                      ${fund.estimated_change_percent != null ? (fund.estimated_change_percent >= 0 ? '+' : '') + fund.estimated_change_percent.toFixed(2) + '%' : '-'}
-                    </td>
-                    <td>
-                      <button class="delete-fund" data-code="${fund.fund_code}">删除</button>
-                    </td>
+                    <th>基金代码</th>
+                    <th>基金名称</th>
+                    <th>基金类型</th>
+                    <th>持有份额</th>
+                    <th>最新净值<span class="nav-date" style="font-weight: normal; margin-left: 4px;">(日期)</span></th>
+                    <th>前一日净值</th>
+                    <th>预估净值</th>
+                    <th class="sortable-header" id="sort-change-percent" style="cursor: pointer; user-select: none;">
+                      预估涨跌幅
+                      <span class="sort-icons">
+                        <span class="sort-icon ${this.sortDirection === 'asc' ? 'active' : ''}">▲</span>
+                        <span class="sort-icon ${this.sortDirection === 'desc' ? 'active' : ''}">▼</span>
+                      </span>
+                    </th>
+                    <th>估值方法</th>
+                    <th>操作</th>
                   </tr>
-                `).join('')}
-              </tbody>
-            </table>
+                </thead>
+                <tbody id="fund-table-body">
+                  ${funds.map(fund => this.renderFundRow(fund)).join('')}
+                </tbody>
+              </table>
+            </div>
           ` : `
-            <p>暂无基金数据，请添加基金</p>
+            <div class="empty-state mt-4">
+              <div class="empty-state-icon">📭</div>
+              <h4 class="empty-state-title">暂无基金数据</h4>
+              <p class="empty-state-description">请在上方添加基金开始跟踪估值</p>
+            </div>
           `}
         </div>
       </div>
     `;
   }
 
-  private bindEventsOnce(): void {
-    if (this.eventsBound || !this.container) return;
-    this.eventsBound = true;
+  private renderFundRow(fund: Fund): string {
+    const changePercentDisplay = fund.estimated_change_percent != null
+      ? (fund.estimated_change_percent >= 0 ? '+' : '') + fund.estimated_change_percent.toFixed(2) + '%'
+      : '-';
+    const changePercentTitle = fund.estimated_change_percent != null
+      ? '预估涨跌幅'
+      : (fund.confidence_note || '暂无预估涨跌幅数据');
+    const navDisplay = fund.nav ? fund.nav.toFixed(4) : '-';
+    const navDateDisplay = fund.nav_date ? `<span class="nav-date">(${fund.nav_date})</span>` : '';
+    const previousNavDisplay = fund.previous_nav ? fund.previous_nav.toFixed(4) : '-';
+    const estimatedNavDisplay = fund.estimated_nav ? fund.estimated_nav.toFixed(4) : '-';
+    const positiveClass = fund.estimated_change_percent != null && fund.estimated_change_percent >= 0 ? 'positive' : 'negative';
+    const valuationMethodDisplay = fund.valuation_method || '-';
 
-    this.container.addEventListener('submit', async (e) => {
+    return `
+      <tr class="fade-in" data-fund-code="${fund.fund_code}">
+        <td><strong>${fund.fund_code}</strong></td>
+        <td>${fund.fund_name}</td>
+        <td><span class="badge badge-secondary">${fund.fund_type}</span></td>
+        <td>${this.formatNumber(fund.total_shares)}</td>
+        <td>${navDisplay} ${navDateDisplay}</td>
+        <td>${previousNavDisplay}</td>
+        <td>${estimatedNavDisplay}</td>
+        <td class="${positiveClass}" title="${changePercentTitle}">
+          ${changePercentDisplay}
+        </td>
+        <td><span class="valuation-method-tag">${valuationMethodDisplay}</span></td>
+        <td>
+          <button class="btn btn-danger btn-sm delete-fund" data-code="${fund.fund_code}">
+            删除
+          </button>
+        </td>
+      </tr>
+    `;
+  }
+
+  private calculateTotalValue(funds: Fund[]): string {
+    let total = 0;
+    for (const fund of funds) {
+      if (fund.estimated_nav && fund.total_shares) {
+        total += fund.estimated_nav * fund.total_shares;
+      } else if (fund.nav && fund.total_shares) {
+        total += fund.nav * fund.total_shares;
+      }
+    }
+    return total > 0 ? total.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '-';
+  }
+
+  private calculateTotalProfit(funds: Fund[]): string {
+    let total = 0;
+    for (const fund of funds) {
+      if (fund.estimated_change_percent && fund.estimated_nav && fund.total_shares) {
+        total += fund.estimated_nav * fund.total_shares * (fund.estimated_change_percent / 100);
+      }
+    }
+    return total.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  private formatNumber(num: number): string {
+    return num.toFixed(3).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  private bindEvents(): void {
+    if (!this.container) return;
+
+    // 使用事件委托
+    this.container.addEventListener('submit', (e) => {
       const target = e.target as HTMLElement;
       if (target.id === 'add-fund-form') {
         e.preventDefault();
-        await this.handleAddFund(target as HTMLFormElement);
+        this.handleAddFund(target as HTMLFormElement);
       }
     });
 
-    this.container.addEventListener('click', async (e) => {
+    this.container.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
 
       if (target.id === 'query-fund-btn') {
         e.preventDefault();
-        await this.handleQueryFund();
+        this.handleQueryFund();
       }
 
       if (target.id === 'refresh-all-btn') {
         e.preventDefault();
-        await this.handleRefreshAll();
+        this.handleRefreshAll();
       }
 
       if (target.classList.contains('delete-fund')) {
         const fundCode = target.dataset.code;
         if (fundCode) {
-          await this.handleDeleteFund(fundCode);
+          this.handleDeleteFund(fundCode);
         }
       }
 
@@ -161,11 +262,11 @@ class FundManagerUI {
       }
     });
 
-    this.container.addEventListener('change', async (e) => {
+    this.container.addEventListener('change', (e) => {
       const target = e.target as HTMLElement;
 
       if (target.id === 'refresh-interval-select') {
-        await this.handleRefreshIntervalChange(target as HTMLSelectElement);
+        this.handleRefreshIntervalChange(target as HTMLSelectElement);
       }
     });
   }
@@ -180,10 +281,11 @@ class FundManagerUI {
         return;
       }
 
-      console.log('开始查询基金信息:', fundCode);
-
       const fundData = await api.getFundData(fundCode);
-      console.log('查询到的基金信息:', fundData);
+      if (!fundData) {
+        toast.error('未查询到基金信息');
+        return;
+      }
 
       const fundNameInput = this.container?.querySelector('#fund-name') as HTMLInputElement;
       const fundTypeInput = this.container?.querySelector('#fund-type') as HTMLInputElement;
@@ -206,8 +308,6 @@ class FundManagerUI {
       const fundType = (form.querySelector('#fund-type') as HTMLInputElement).value;
       const totalShares = parseFloat((form.querySelector('#total-shares') as HTMLInputElement).value);
 
-      console.log('添加基金表单数据:', { fundCode, fundName, fundType, totalShares });
-
       const newFund: Fund = {
         fund_code: fundCode,
         fund_name: fundName,
@@ -216,12 +316,18 @@ class FundManagerUI {
         holdings: [],
       };
 
-      console.log('创建基金对象:', newFund);
+      // 先检查基金是否已在本地存在
+      if (fundManager.getFund(fundCode)) {
+        toast.error(`基金已存在：${fundCode}`);
+        return;
+      }
 
-      const success = await fundManager.addFund(newFund);
-      console.log('添加基金结果:', success);
+      // 调用后端 API 添加基金
+      const addResult = await api.addFund(newFund);
 
-      if (success) {
+      if (addResult.success) {
+        // 添加基金到本地数组
+        await fundManager.loadFunds();
         toast.success('基金添加成功');
         form.reset();
         await this.render();
@@ -238,6 +344,8 @@ class FundManagerUI {
             fund.previous_nav = valuationResult.previous_nav !== undefined && valuationResult.previous_nav !== null ? valuationResult.previous_nav : fundData.previous_nav;
             fund.estimated_nav = valuationResult.estimated_nav;
             fund.estimated_change_percent = valuationResult.estimated_change_percent;
+            fund.confidence_note = valuationResult.confidence_note;
+            fund.valuation_method = valuationResult.valuation_method;
             fund.last_update = valuationResult.timestamp;
 
             await this.render();
@@ -246,7 +354,8 @@ class FundManagerUI {
           }
         }
       } else {
-        toast.error('基金添加失败，可能是基金已存在或其他原因');
+        // 显示后端返回的具体错误消息
+        toast.error(addResult.message || '基金添加失败');
       }
     } catch (error) {
       console.error('处理添加基金时出错:', error);
@@ -276,11 +385,11 @@ class FundManagerUI {
     const refreshBtn = this.container?.querySelector('#refresh-all-btn') as HTMLButtonElement;
     if (refreshBtn) {
       refreshBtn.disabled = true;
-      refreshBtn.textContent = '刷新中...';
+      refreshBtn.textContent = '🔄 刷新中...';
     }
 
     try {
-      await this.refreshValuations();
+      await this.refreshValuations(false);
       toast.success('数据刷新成功');
     } catch (error) {
       console.error('刷新数据失败:', error);
@@ -288,12 +397,12 @@ class FundManagerUI {
     } finally {
       if (refreshBtn) {
         refreshBtn.disabled = false;
-        refreshBtn.textContent = '刷新数据';
+        refreshBtn.textContent = '🔄 刷新数据';
       }
     }
   }
 
-  async refreshValuations(): Promise<void> {
+  async refreshValuations(fullRender: boolean = true): Promise<void> {
     const funds = fundManager.getFunds();
     if (funds.length === 0) return;
 
@@ -301,49 +410,160 @@ class FundManagerUI {
       const fundCodes = funds.map(f => f.fund_code);
       console.log('开始刷新估值，基金代码:', fundCodes);
 
-      const [fundDatas, valuationResults] = await Promise.all([
-        api.getFundDataBatch(fundCodes),
-        api.getFundValuationBatch(fundCodes, true)
-      ]);
+      // 设置加载中标志
+      this.isValuationLoading = true;
 
-      console.log('获取基金数据返回:', fundDatas);
-      console.log('获取估值返回:', valuationResults);
+      // 显示加载状态
+      this.showLoadingState();
 
-      for (const fundData of fundDatas.data) {
-        const fund = fundManager.getFund(fundData.fund_code);
-        if (fund) {
-          fund.nav = fundData.nav;
-          fund.previous_nav = fundData.previous_nav;
-          console.log(`更新基金 ${fundData.fund_code} 最新净值:`, fundData.nav, '昨日净值:', fundData.previous_nav);
+      // 使用流式接口获取估值数据，实时更新 UI
+      await api.getFundValuationBatchStream(
+        fundCodes,
+        {
+          onValuation: async (result) => {
+            const fund = fundManager.getFund(result.fund_code);
+            if (fund) {
+              fund.estimated_nav = result.estimated_nav;
+              fund.estimated_change_percent = result.estimated_change_percent;
+              fund.confidence_note = result.confidence_note;
+              fund.valuation_method = result.valuation_method;
+              fund.last_update = result.timestamp;
+              if (result.latest_nav !== undefined && result.latest_nav !== null) {
+                fund.nav = result.latest_nav;
+              }
+              if (result.previous_nav !== undefined && result.previous_nav !== null) {
+                fund.previous_nav = result.previous_nav;
+              }
+              if (result.nav_date) {
+                fund.nav_date = result.nav_date;
+              }
+              // 实时更新单个基金行
+              this.updateFundRow(result.fund_code);
+            }
+          },
+          onError: (fundCode, message) => {
+            console.error(`基金 ${fundCode} 估值失败：`, message);
+            // 更新失败状态
+            this.updateFundRowError(fundCode);
+          },
+          onComplete: (summary) => {
+            console.log(`批量估值完成，成功：${summary.successCount}, 失败：${summary.failedCount}`);
+            // 移除加载状态
+            this.removeLoadingState();
+            // 加载完成后，如果用户已选择排序方向，重新排序以正确显示
+            this.isValuationLoading = false;
+            if (this.sortDirection) {
+              this.sortAndRender();
+            }
+          }
+        },
+        true
+      );
+
+      // 单独获取基金数据（净值信息）
+      try {
+        const fundDatas = await api.getFundDataBatch(fundCodes);
+        for (const fundData of fundDatas.data) {
+          const fund = fundManager.getFund(fundData.fund_code);
+          if (fund) {
+            fund.nav = fundData.nav;
+            fund.previous_nav = fundData.previous_nav;
+            if (fundData.nav_date) {
+              fund.nav_date = fundData.nav_date;
+            }
+          }
+          // 实时更新单个基金行
+          this.updateFundRow(fundData.fund_code);
         }
+      } catch (error) {
+        console.error('获取基金数据失败:', error);
       }
 
-      for (const result of valuationResults) {
-        const fund = fundManager.getFund(result.fund_code);
-        if (fund) {
-          fund.estimated_nav = result.estimated_nav;
-          fund.estimated_change_percent = result.estimated_change_percent;
-          fund.last_update = result.timestamp;
-          if (result.latest_nav !== undefined && result.latest_nav !== null) {
-            fund.nav = result.latest_nav;
-          }
-          if (result.previous_nav !== undefined && result.previous_nav !== null) {
-            fund.previous_nav = result.previous_nav;
-          }
-          console.log(`更新基金 ${result.fund_code} 估值:`, {
-            estimated_nav: result.estimated_nav,
-            estimated_change_percent: result.estimated_change_percent,
-            latest_nav: result.latest_nav,
-            previous_nav: result.previous_nav
-          });
-        }
-      }
-
-      await this.render();
       console.log('估值刷新完成');
     } catch (error) {
       console.error('刷新估值失败:', error);
+      this.isValuationLoading = false;
+      this.removeLoadingState();
     }
+  }
+
+  // 显示加载状态
+  private showLoadingState(): void {
+    if (!this.container) return;
+    const tbody = this.container.querySelector('#fund-table-body');
+    if (!tbody) return;
+
+    const rows = tbody.querySelectorAll('tr');
+    rows.forEach(row => {
+      const fundCode = row.getAttribute('data-fund-code');
+      if (fundCode) {
+        // 添加加载中的视觉效果
+        row.style.opacity = '0.5';
+        row.setAttribute('data-loading', 'true');
+      }
+    });
+  }
+
+  // 移除加载状态
+  private removeLoadingState(): void {
+    if (!this.container) return;
+    const tbody = this.container.querySelector('#fund-table-body');
+    if (!tbody) return;
+
+    const rows = tbody.querySelectorAll('tr');
+    rows.forEach(row => {
+      row.style.opacity = '1';
+      row.removeAttribute('data-loading');
+    });
+  }
+
+  // 更新单个基金行
+  private updateFundRow(fundCode: string): void {
+    if (!this.container) return;
+    const tbody = this.container.querySelector('#fund-table-body');
+    if (!tbody) return;
+
+    const row = tbody.querySelector(`tr[data-fund-code="${fundCode}"]`);
+    if (!row) return;
+
+    const fund = fundManager.getFund(fundCode);
+    if (!fund) return;
+
+    // 重新渲染该行的内容
+    row.outerHTML = this.renderFundRow(fund);
+  }
+
+  // 更新基金行错误状态
+  private updateFundRowError(fundCode: string): void {
+    if (!this.container) return;
+    const tbody = this.container.querySelector('#fund-table-body');
+    if (!tbody) return;
+
+    const row = tbody.querySelector(`tr[data-fund-code="${fundCode}"]`);
+    if (!row) return;
+
+    // 添加错误视觉提示
+    row.style.backgroundColor = 'rgba(255, 0, 0, 0.1)';
+    row.setAttribute('data-error', 'true');
+  }
+
+  // 排序并重新渲染（在估值加载完成后调用）
+  private sortAndRender(): void {
+    if (!this.container) return;
+    const tbody = this.container.querySelector('#fund-table-body');
+    if (!tbody) return;
+
+    const funds = this.getSortedFunds();
+    tbody.innerHTML = funds.map(fund => this.renderFundRow(fund)).join('');
+  }
+
+  private updateTableBody(): void {
+    if (!this.container) return;
+    const tbody = this.container.querySelector('#fund-table-body');
+    if (!tbody) return;
+
+    const funds = this.getSortedFunds();
+    tbody.innerHTML = funds.map(fund => this.renderFundRow(fund)).join('');
   }
 
   startAutoRefresh(): void {
@@ -352,7 +572,7 @@ class FundManagerUI {
     }
 
     this.refreshInterval = window.setInterval(() => {
-      this.refreshValuations();
+      this.refreshValuations(false); // 自动刷新时不重新渲染整个表格
     }, this.refreshIntervalMs);
   }
 
@@ -386,15 +606,48 @@ class FundManagerUI {
 
   private getSortedFunds(): Fund[] {
     const funds = fundManager.getFunds();
-    
+
     if (!this.sortDirection) {
       return funds;
     }
 
     return [...funds].sort((a, b) => {
-      const aValue = a.estimated_change_percent ?? -Infinity;
-      const bValue = b.estimated_change_percent ?? -Infinity;
-      
+      const aValue = a.estimated_change_percent;
+      const bValue = b.estimated_change_percent;
+
+      const aIsValid = aValue !== null && aValue !== undefined;
+      const bIsValid = bValue !== null && bValue !== undefined;
+
+      // 无效值放在负值和 0/正值之间
+      // 升序：负值 → 无效 → 0 和正值
+      // 降序：正值和 0 → 无效 → 负值
+      if (!aIsValid && !bIsValid) {
+        return 0;
+      }
+
+      if (!aIsValid) {
+        // a 无效
+        if (this.sortDirection === 'asc') {
+          // 升序：b 是负数则 a 在后，b 是 0 或正数则 a 在前
+          return bValue! < 0 ? 1 : -1;
+        } else {
+          // 降序：b 是正数或 0 则 a 在后，b 是负数则 a 在前
+          return bValue! >= 0 ? 1 : -1;
+        }
+      }
+
+      if (!bIsValid) {
+        // b 无效
+        if (this.sortDirection === 'asc') {
+          // 升序：a 是负数则 a 在前，a 是 0 或正数则 a 在后
+          return aValue! < 0 ? -1 : 1;
+        } else {
+          // 降序：a 是正数或 0 则 a 在前，a 是负数则 a 在后
+          return aValue! >= 0 ? -1 : 1;
+        }
+      }
+
+      // 两个都有效，正常比较
       if (this.sortDirection === 'asc') {
         return aValue - bValue;
       } else {
@@ -411,8 +664,9 @@ class FundManagerUI {
     } else {
       this.sortDirection = null;
     }
-    
-    this.render();
+
+    // 使用 sortAndRender 而不是 render，确保排序正确
+    this.sortAndRender();
   }
 }
 

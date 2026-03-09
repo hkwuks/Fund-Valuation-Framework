@@ -109,20 +109,26 @@ export class FundManager {
     }
   }
 
-  // 计算估值
-  async calculateValuation(codes: string[]): Promise<void> {
+  // 计算估值（流式版本）
+  async calculateValuation(codes: string[], preferHoldings: boolean = true): Promise<void> {
     try {
-      const results = await api.getFundValuationBatch(codes);
-      results.forEach(result => {
-        this.valuations.set(result.fund_code, result);
+      await api.getFundValuationBatchStream(
+        codes,
+        {
+          onValuation: (result) => {
+            this.valuations.set(result.fund_code, result);
 
-        const fund = this.getFund(result.fund_code);
-        if (fund) {
-          fund.estimated_nav = result.estimated_nav;
-          fund.estimated_change_percent = result.estimated_change_percent;
-          fund.last_update = result.timestamp;
-        }
-      });
+            const fund = this.getFund(result.fund_code);
+            if (fund) {
+              fund.estimated_nav = result.estimated_nav;
+              fund.estimated_change_percent = result.estimated_change_percent;
+              fund.confidence_note = result.confidence_note;
+              fund.last_update = result.timestamp;
+            }
+          },
+        },
+        preferHoldings
+      );
     } catch (error) {
       console.error('计算估值失败:', error);
     }

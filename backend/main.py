@@ -7,27 +7,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.openapi.docs import get_swagger_ui_html
 from backend.config import settings
 from backend.api import funds, market, valuation
-from backend.market_data import close_session
 from loguru import logger
-from contextlib import asynccontextmanager
 
 
 logger.remove()
-logger.add(sys.stdout, level="INFO", format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
-logger.add("./logs/api.log", rotation="10 MB", retention="7 days", level="DEBUG", encoding="utf-8")
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    logger.info("基金估值服务启动中...")
-    yield
-    logger.info("基金估值服务关闭中...")
-    await close_session()
-    logger.info("服务已关闭")
+logger.add(
+    sys.stdout, level="INFO", format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
+)
+logger.add(
+    "./logs/api.log",
+    rotation="10 MB",
+    retention="7 days",
+    level="DEBUG",
+    encoding="utf-8",
+)
 
 
 app = FastAPI(
@@ -54,7 +49,6 @@ app = FastAPI(
 | benchmark_only | 仅基于业绩基准 | 30% |
 """,
     debug=settings.DEBUG,
-    lifespan=lifespan
 )
 
 app.add_middleware(
@@ -78,7 +72,7 @@ async def root():
         "version": settings.APP_VERSION,
         "status": "running",
         "docs": "/docs",
-        "redoc": "/redoc"
+        "redoc": "/redoc",
     }
 
 
@@ -97,6 +91,6 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={
             "success": False,
             "error_code": "INTERNAL_ERROR",
-            "error_message": str(exc)
-        }
+            "error_message": str(exc),
+        },
     )
