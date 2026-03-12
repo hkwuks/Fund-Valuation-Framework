@@ -9,7 +9,6 @@ from backend.mcp_server.tools import FundValuationTools
 from backend.mcp_server.resources import FundValuationResources
 from backend.mcp_server.prompts import FundValuationPrompts
 from loguru import logger
-import sys
 
 
 def create_mcp_server() -> FastMCP:

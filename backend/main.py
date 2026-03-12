@@ -7,6 +7,10 @@ from contextlib import asynccontextmanager
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 配置日志
+log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+os.makedirs(log_dir, exist_ok=True)
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -20,7 +24,7 @@ logger.add(
     sys.stdout, level="INFO", format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
 )
 logger.add(
-    "./logs/api.log",
+    os.path.join(log_dir, "api.log"),
     rotation="10 MB",
     retention="7 days",
     level="DEBUG",
@@ -30,8 +34,34 @@ logger.add(
 
 def run_mcp_server():
     """在独立进程中运行 MCP 服务器"""
+    from loguru import logger
+    import sys
+    import os
+
+    # 配置 MCP 服务器日志
+    log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, "mcp.log")
+
+    logger.remove()
+    logger.add(
+        sys.stdout,
+        level="INFO",
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <blue>MCP</blue> | {level} | {message}"
+    )
+    logger.add(
+        log_file,
+        rotation="10 MB",
+        retention="7 days",
+        level="DEBUG",
+        encoding="utf-8",
+        format="{time:YYYY-MM-DD HH:mm:ss} | MCP | {level} | {name}:{line} | {message}"
+    )
+
     from backend.mcp_server.server import create_mcp_server
+    logger.info("正在初始化 MCP 服务器...")
     mcp = create_mcp_server()
+    logger.info("正在启动 MCP 服务器...")
     mcp.run()
 
 
