@@ -359,7 +359,7 @@ server: {
 本项目是一个个人科研项目，目的是为投资者提供基金估值参考服务。并不承诺数据的可靠性和准确性，用户在使用时请自行承担风险。估值数据仅供参考，不构成任何投资建议。
 
 ## Star History
-
+```html
 <a href="https://www.star-history.com/?repos=hkwuks%2FFund-Valuation-Framework&type=date&legend=top-left">
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=hkwuks/Fund-Valuation-Framework&type=date&theme=dark&legend=top-left" />
@@ -367,3 +367,4 @@ server: {
    <img alt="Star History Chart" src="https://api.star-history.com/image?repos=hkwuks/Fund-Valuation-Framework&type=date&legend=top-left" />
  </picture>
 </a>
+```
