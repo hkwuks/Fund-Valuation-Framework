@@ -8,6 +8,7 @@ from backend.api.schemas import (
     ValuationBatchRequest,
     ValuationDetailResponse,
 )
+from asyncio import Queue
 from backend.models import ValuationType
 from loguru import logger
 import asyncio
@@ -176,7 +177,6 @@ async def get_fund_valuation_batch_stream(request: ValuationBatchRequest):
     - event: complete - 全部完成
     - event: error - 错误信息
     """
-    from asyncio import Queue
 
     async def calculate_single_with_queue(code: str, queue: Queue):
         """计算单个基金估值并将结果放入队列"""

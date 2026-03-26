@@ -33,12 +33,20 @@ logger.add(
 # 全局 MCP 服务器实例和 session manager 上下文
 _mcp_server = None
 _mcp_session_manager_context = None
+_mcp_app = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    global _mcp_server, _mcp_session_manager_context
+    global _mcp_server, _mcp_session_manager_context, _mcp_app
+
+    # 启动时清除关闭事件
+    try:
+        from backend.market_data import clear_shutdown_event
+        clear_shutdown_event()
+    except Exception as e:
+        logger.warning(f"清除关闭事件出错: {e}")
 
     # 启动时初始化 MCP 服务器
     logger.info("正在初始化 MCP 服务器...")
@@ -47,16 +55,14 @@ async def lifespan(app: FastAPI):
     logger.info("MCP 服务器初始化完成")
 
     # 将 MCP streamable HTTP 应用挂载到 FastAPI
-    # FastMCP 的 streamable_http_app 同时支持 SSE 和 HTTP 消息
-    mcp_app = _mcp_server.streamable_http_app()
+    _mcp_app = _mcp_server.streamable_http_app()
 
     # 获取 session manager 并启动其生命周期
-    # StreamableHTTPSessionManager 需要在 lifespan 中调用 run() 来初始化 task_group
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
     # 从 mcp_app 的路由中获取 session_manager
     session_manager = None
-    for route in mcp_app.routes:
+    for route in _mcp_app.routes:
         if hasattr(route, 'app') and hasattr(route.app, 'session_manager'):
             session_manager = route.app.session_manager
             break
@@ -68,22 +74,62 @@ async def lifespan(app: FastAPI):
         logger.info("MCP session manager 已启动")
 
     # 将 MCP 应用挂载到 /mcp 路径
-    app.mount("/mcp", mcp_app)
+    app.mount("/mcp", _mcp_app)
 
     logger.info("MCP HTTP 服务已挂载到 /mcp 路径")
     logger.info("MCP 端点：/mcp (SSE GET, HTTP POST)")
 
     yield
 
-    # 关闭时清理
+    # 关闭时清理 - 按照依赖顺序反向关闭
+    logger.info("正在关闭服务...")
+
+    # 0. 首先设置关闭事件，通知所有正在进行的请求停止
+    try:
+        from backend.market_data import set_shutdown_event
+        set_shutdown_event()
+        logger.info("已发送关闭信号到市场数据服务")
+    except Exception as e:
+        logger.warning(f"设置关闭事件出错: {e}")
+
+    # 1. 先关闭 MCP session manager
     if _mcp_session_manager_context is not None:
         logger.info("正在关闭 MCP session manager...")
-        await _mcp_session_manager_context.__aexit__(None, None, None)
-        _mcp_session_manager_context = None
+        try:
+            await asyncio.wait_for(
+                _mcp_session_manager_context.__aexit__(None, None, None),
+                timeout=5.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning("MCP session manager 关闭超时，强制继续")
+        except Exception as e:
+            logger.warning(f"MCP session manager 关闭出错: {e}")
+        finally:
+            _mcp_session_manager_context = None
 
-    logger.info("正在关闭 MCP 服务器...")
-    _mcp_server = None
-    logger.info("MCP 服务器已关闭")
+    # 2. 关闭市场数据服务的连接
+    logger.info("正在关闭市场数据服务连接...")
+    try:
+        from backend.market_data import market_data_service
+        await asyncio.wait_for(
+            market_data_service.close(),
+            timeout=5.0
+        )
+        logger.info("市场数据服务连接已关闭")
+    except asyncio.TimeoutError:
+        logger.warning("市场数据服务关闭超时")
+    except Exception as e:
+        logger.warning(f"市场数据服务关闭出错: {e}")
+
+    # 3. 清理 MCP 服务器
+    if _mcp_server is not None:
+        logger.info("正在清理 MCP 服务器...")
+        _mcp_server = None
+
+    # 4. 清理 app 引用
+    _mcp_app = None
+
+    logger.info("服务已关闭")
 
 
 app = FastAPI(

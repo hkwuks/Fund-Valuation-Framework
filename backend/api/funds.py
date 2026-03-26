@@ -1,45 +1,34 @@
 from fastapi import APIRouter, Body
 from typing import List, Dict, Any
-import json
-import os
 from backend.market_data import market_data_service
+from backend.cache_service import data_cache_service
 from loguru import logger
-
-# 基金数据文件路径
-FUNDS_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'funds.json')
-
 
 router = APIRouter(prefix="/funds", tags=["基金管理"])
 
 
-def ensure_data_dir():
-    """确保数据目录存在"""
-    os.makedirs(os.path.dirname(FUNDS_FILE_PATH), exist_ok=True)
-
-
-def load_funds_from_file() -> List[Dict[str, Any]]:
-    """从文件加载基金数据"""
-    ensure_data_dir()
-    
-    if not os.path.exists(FUNDS_FILE_PATH):
-        return []
-    
+async def load_funds_from_cache() -> List[Dict[str, Any]]:
+    """从缓存加载基金列表"""
     try:
-        with open(FUNDS_FILE_PATH, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        cache_data = await data_cache_service.get_funds_cache(ttl=None)
+        if cache_data and "funds" in cache_data:
+            funds = cache_data["funds"]
+            if isinstance(funds, list):
+                return funds
+            elif isinstance(funds, dict):
+                return list(funds.values())
+        return []
     except Exception as e:
-        logger.error(f"加载基金文件失败: {e}")
+        logger.error(f"加载基金缓存失败: {e}")
         return []
 
-def save_funds_to_file(funds: List[Dict[str, Any]]):
-    """保存基金数据到文件"""
-    ensure_data_dir()
-    
+
+async def save_funds_to_cache(funds: List[Dict[str, Any]]):
+    """保存基金列表到缓存"""
     try:
-        with open(FUNDS_FILE_PATH, 'w', encoding='utf-8') as f:
-            json.dump(funds, f, ensure_ascii=False, indent=2)
+        await data_cache_service.set_funds_cache({"funds": funds})
     except Exception as e:
-        logger.error(f"保存基金文件失败: {e}")
+        logger.error(f"保存基金缓存失败: {e}")
 
 
 @router.get(
@@ -48,305 +37,161 @@ def save_funds_to_file(funds: List[Dict[str, Any]]):
     description="获取保存的基金列表"
 )
 async def get_funds():
-    """
-    获取基金列表
-    """
+    """获取基金列表"""
     try:
-        funds = load_funds_from_file()
+        funds = await load_funds_from_cache()
         return {
             "success": True,
             "message": "获取成功",
-            "data": {
-                "funds": funds
-            }
+            "data": {"funds": funds}
         }
     except Exception as e:
         logger.error(f"获取基金列表失败: {e}")
         return {
             "success": False,
             "message": f"获取基金列表失败: {str(e)}",
-            "data": {
-                "funds": []
-            }
+            "data": {"funds": []}
         }
 
 
-@router.post(
-    "/add",
-    summary="添加基金",
-    description="添加新基金到基金列表"
-)
+@router.post("/add", summary="添加基金")
 async def add_fund(fund: Dict[str, Any] = Body(...)):
-    """
-    添加基金
-    
-    - **fund**: 基金数据，包含 fund_code、fund_name、fund_type、total_shares 等字段
-    """
+    """添加基金"""
     try:
         logger.info(f"收到添加基金请求: {fund}")
-        
-        # 验证必填字段
         required_fields = ['fund_code', 'fund_name', 'fund_type', 'total_shares']
         for field in required_fields:
             if field not in fund:
-                return {
-                    "success": False,
-                    "message": f"缺少必填字段: {field}"
-                }
-        
-        # 加载现有基金
-        funds = load_funds_from_file()
-        
-        # 检查基金是否已存在
-        for existing_fund in funds:
-            if existing_fund.get('fund_code') == fund.get('fund_code'):
-                return {
-                    "success": False,
-                    "message": f"基金已存在: {fund.get('fund_code')}"
-                }
-        
-        # 添加新基金
+                return {"success": False, "message": f"缺少必填字段: {field}"}
+
+        funds = await load_funds_from_cache()
+        for existing in funds:
+            if existing.get('fund_code') == fund.get('fund_code'):
+                return {"success": False, "message": f"基金已存在: {fund.get('fund_code')}"}
+
         funds.append(fund)
-        
-        # 保存到文件
-        save_funds_to_file(funds)
-        
-        return {
-            "success": True,
-            "message": "基金添加成功"
-        }
+        await save_funds_to_cache(funds)
+        return {"success": True, "message": "基金添加成功"}
     except Exception as e:
         logger.error(f"添加基金失败: {e}")
-        return {
-            "success": False,
-            "message": f"添加基金失败: {str(e)}"
-        }
+        return {"success": False, "message": f"添加基金失败: {str(e)}"}
 
 
-@router.delete(
-    "/{fund_code}",
-    summary="删除基金",
-    description="从基金列表中删除指定基金"
-)
+@router.delete("/{fund_code}", summary="删除基金")
 async def delete_fund(fund_code: str):
-    """
-    删除基金
-    
-    - **fund_code**: 基金代码
-    """
+    """删除基金"""
     try:
-        # 加载现有基金
-        funds = load_funds_from_file()
-        
-        # 检查基金是否存在
-        fund_exists = any(f.get('fund_code') == fund_code for f in funds)
-        if not fund_exists:
-            return {
-                "success": False,
-                "message": f"基金不存在: {fund_code}"
-            }
-        
-        # 删除基金
+        funds = await load_funds_from_cache()
+        if not any(f.get('fund_code') == fund_code for f in funds):
+            return {"success": False, "message": f"基金不存在: {fund_code}"}
+
         funds = [f for f in funds if f.get('fund_code') != fund_code]
-        
-        # 保存到文件
-        save_funds_to_file(funds)
-        
-        return {
-            "success": True,
-            "message": "基金删除成功"
-        }
+        await save_funds_to_cache(funds)
+        return {"success": True, "message": "基金删除成功"}
     except Exception as e:
         logger.error(f"删除基金失败: {e}")
-        return {
-            "success": False,
-            "message": f"删除基金失败: {str(e)}"
-        }
+        return {"success": False, "message": f"删除基金失败: {str(e)}"}
 
 
-@router.put(
-    "/{fund_code}",
-    summary="更新基金",
-    description="更新现有基金的信息"
-)
+@router.put("/{fund_code}", summary="更新基金")
 async def update_fund(fund_code: str, fund: Dict[str, Any] = Body(...)):
-    """
-    更新基金
-    
-    - **fund_code**: 基金代码
-    - **fund**: 基金数据
-    """
+    """更新基金"""
     try:
-        # 加载现有基金
-        funds = load_funds_from_file()
-        
-        # 查找基金
+        funds = await load_funds_from_cache()
         fund_index = None
         for i, f in enumerate(funds):
             if f.get('fund_code') == fund_code:
                 fund_index = i
                 break
-        
+
         if fund_index is None:
-            return {
-                "success": False,
-                "message": f"基金不存在: {fund_code}"
-            }
-        
-        # 更新基金
+            return {"success": False, "message": f"基金不存在: {fund_code}"}
+
         funds[fund_index].update(fund)
-        
-        # 保存到文件
-        save_funds_to_file(funds)
-        
-        return {
-            "success": True,
-            "message": "基金更新成功"
-        }
+        await save_funds_to_cache(funds)
+        return {"success": True, "message": "基金更新成功"}
     except Exception as e:
         logger.error(f"更新基金失败: {e}")
-        return {
-            "success": False,
-            "message": f"更新基金失败: {str(e)}"
-        }
+        return {"success": False, "message": f"更新基金失败: {str(e)}"}
 
 
-@router.post(
-    "/batch",
-    summary="批量获取基金信息",
-    description="根据基金代码列表批量获取基金详细信息"
-)
-async def get_fund_data_batch(fund_codes: List[str] = Body(...)):
-    """
-    批量获取基金信息
-    
-    - **fund_codes**: 基金代码列表
-    """
+@router.post("/batch", summary="批量获取基金信息")
+async def get_fund_data_batch(fund_codes: List[str] = Body(...), use_cache: bool = True):
+    """批量获取基金信息"""
     try:
         fund_datas = []
-        
-        for fund_code in fund_codes:
+        codes_to_fetch = []
+
+        if use_cache:
+            for code in fund_codes:
+                cached = await data_cache_service.get_cached_fund_data(code, ttl=60)
+                if cached:
+                    fund_datas.append(cached)
+                else:
+                    codes_to_fetch.append(code)
+        else:
+            codes_to_fetch = fund_codes
+
+        for code in codes_to_fetch:
             try:
-                fund_data = await market_data_service.get_fund_data(fund_code)
-                if fund_data:
-                    fund_datas.append(fund_data.model_dump())
+                data = await market_data_service.get_fund_data(code)
+                if data:
+                    fund_dict = data.model_dump()
+                    fund_datas.append(fund_dict)
+                    await data_cache_service.update_fund_cache(code, fund_dict)
             except Exception as e:
-                logger.error(f"获取基金 {fund_code} 信息失败: {e}")
-        
-        return {
-            "success": True,
-            "message": "批量获取成功",
-            "data": fund_datas
-        }
+                logger.error(f"获取基金 {code} 失败: {e}")
+
+        return {"success": True, "message": "批量获取成功", "data": fund_datas}
     except Exception as e:
         logger.error(f"批量获取基金信息失败: {e}")
-        return {
-            "success": False,
-            "message": f"批量获取基金信息失败: {str(e)}",
-            "data": []
-        }
+        return {"success": False, "message": f"批量获取失败: {str(e)}", "data": []}
 
 
-@router.get(
-    "/query/{fund_code}",
-    summary="查询基金信息",
-    description="根据基金代码查询基金详细信息（从外部数据源获取）"
-)
-async def query_fund_data(fund_code: str):
-    """
-    查询基金信息
-    
-    - **fund_code**: 基金代码
-    """
+@router.get("/query/{fund_code}", summary="查询基金信息")
+async def query_fund_data(fund_code: str, use_cache: bool = True):
+    """查询基金信息"""
     try:
-        # 使用market_data_service从外部数据源获取基金信息
-        fund_data = await market_data_service.get_fund_data(fund_code)
-        
-        if fund_data:
-            return {
-                "success": True,
-                "message": "查询成功",
-                "data": fund_data.model_dump()
-            }
-        else:
-            return {
-                "success": False,
-                "message": f"未找到基金信息: {fund_code}"
-            }
+        if use_cache:
+            cached = await data_cache_service.get_cached_fund_data(fund_code, ttl=60)
+            if cached:
+                return {"success": True, "message": "查询成功（缓存）", "data": cached}
+
+        data = await market_data_service.get_fund_data(fund_code)
+        if data:
+            fund_dict = data.model_dump()
+            await data_cache_service.update_fund_cache(fund_code, fund_dict)
+            return {"success": True, "message": "查询成功", "data": fund_dict}
+        return {"success": False, "message": f"未找到基金: {fund_code}"}
     except Exception as e:
-        logger.error(f"查询基金信息失败: {e}")
-        return {
-            "success": False,
-            "message": f"查询基金信息失败: {str(e)}"
-        }
+        logger.error(f"查询基金失败: {e}")
+        return {"success": False, "message": f"查询失败: {str(e)}"}
 
 
-@router.get(
-    "/{fund_code}",
-    summary="获取单个基金信息",
-    description="根据基金代码获取基金详细信息"
-)
+@router.get("/{fund_code}", summary="获取单个基金")
 async def get_fund(fund_code: str):
-    """
-    获取单个基金信息
-    
-    - **fund_code**: 基金代码
-    """
+    """获取单个基金信息"""
     try:
-        # 加载现有基金
-        funds = load_funds_from_file()
-        
-        # 查找基金
+        funds = await load_funds_from_cache()
         for fund in funds:
             if fund.get('fund_code') == fund_code:
-                return {
-                    "success": True,
-                    "message": "获取成功",
-                    "data": fund
-                }
-        
-        fund_data = await market_data_service.get_fund_data(fund_code)
-        
-        if fund_data:
-            return {
-                "success": True,
-                "message": "获取成功",
-                "data": fund_data.model_dump()
-            }
-        
-        # 基金不存在
-        return {
-            "success": False,
-            "message": f"基金不存在: {fund_code}"
-        }
+                return {"success": True, "message": "获取成功", "data": fund}
+
+        data = await market_data_service.get_fund_data(fund_code)
+        if data:
+            return {"success": True, "message": "获取成功", "data": data.model_dump()}
+        return {"success": False, "message": f"基金不存在: {fund_code}"}
     except Exception as e:
-        logger.error(f"获取基金信息失败: {e}")
-        return {
-            "success": False,
-            "message": f"获取基金信息失败: {str(e)}"
-        }
+        logger.error(f"获取基金失败: {e}")
+        return {"success": False, "message": f"获取失败: {str(e)}"}
 
 
-@router.post(
-    "/clear",
-    summary="清空基金列表",
-    description="清空所有基金数据"
-)
+@router.post("/clear", summary="清空基金列表")
 async def clear_funds():
-    """
-    清空基金列表
-    """
+    """清空基金列表"""
     try:
-        # 保存空列表
-        save_funds_to_file([])
-        
-        return {
-            "success": True,
-            "message": "基金列表清空成功"
-        }
+        await save_funds_to_cache([])
+        return {"success": True, "message": "基金列表清空成功"}
     except Exception as e:
         logger.error(f"清空基金列表失败: {e}")
-        return {
-            "success": False,
-            "message": f"清空基金列表失败: {str(e)}"
-        }
+        return {"success": False, "message": f"清空失败: {str(e)}"}

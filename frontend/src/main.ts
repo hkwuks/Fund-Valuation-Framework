@@ -1,8 +1,6 @@
 import './style.css'
 import { toast } from './toast'
 import { fundManagerUI } from './fundManagerUI'
-import { valuationUI } from './valuationUI'
-import { fundInfoUI } from './fundInfoUI'
 import { marketDataUI } from './marketDataUI'
 
 toast.init();
@@ -59,14 +57,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <span class="tab-button-icon">💼</span>
         基金管理
       </button>
-      <button class="tab-button" data-tab="valuation" role="tab" aria-selected="false">
-        <span class="tab-button-icon">📊</span>
-        基金估值
-      </button>
-      <button class="tab-button" data-tab="fund-info" role="tab" aria-selected="false">
-        <span class="tab-button-icon">📋</span>
-        基金信息
-      </button>
       <button class="tab-button" data-tab="market-data" role="tab" aria-selected="false">
         <span class="tab-button-icon">🌍</span>
         市场数据
@@ -76,8 +66,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <!-- 标签内容区域 -->
     <main>
       <div class="tab-content active" id="fund-manager-container" role="tabpanel"></div>
-      <div class="tab-content" id="valuation-container" role="tabpanel"></div>
-      <div class="tab-content" id="fund-info-container" role="tabpanel"></div>
       <div class="tab-content" id="market-data-container" role="tabpanel"></div>
     </main>
   </div>
@@ -98,14 +86,6 @@ async function initApp() {
   // 初始化基金管理界面
   const fundManagerContainer = document.querySelector<HTMLDivElement>('#fund-manager-container')!
   fundManagerUI.init(fundManagerContainer).catch(console.error)
-
-  // 初始化基金估值界面
-  const valuationContainer = document.querySelector<HTMLDivElement>('#valuation-container')!
-  valuationUI.init(valuationContainer)
-
-  // 初始化基金信息界面
-  const fundInfoContainer = document.querySelector<HTMLDivElement>('#fund-info-container')!
-  fundInfoUI.init(fundInfoContainer)
 
   // 初始化市场数据界面
   const marketDataContainer = document.querySelector<HTMLDivElement>('#market-data-container')!

@@ -29,8 +29,8 @@ class FundManagerUI {
     await this.render();
     this.bindEvents();
 
-    // 开始刷新估值（实时更新 UI）
-    await this.refreshValuations(false);
+    // 开始刷新估值（不阻塞，实时更新 UI）
+    this.refreshValuations(false).catch(console.error);
 
     this.startAutoRefresh();
     this.isInitialized = true;
@@ -448,7 +448,7 @@ class FundManagerUI {
     }
   }
 
-  async refreshValuations(fullRender: boolean = true): Promise<void> {
+  async refreshValuations(_fullRender: boolean = true): Promise<void> {
     const funds = fundManager.getFunds();
     if (funds.length === 0) return;
 
@@ -566,7 +566,7 @@ class FundManagerUI {
     const tbody = this.container.querySelector('#fund-table-body');
     if (!tbody) return;
 
-    const row = tbody.querySelector(`tr[data-fund-code="${fundCode}"]`);
+    const row = tbody.querySelector<HTMLTableRowElement>(`tr[data-fund-code="${fundCode}"]`);
     if (!row) return;
 
     // 添加错误视觉提示
@@ -576,15 +576,6 @@ class FundManagerUI {
 
   // 排序并重新渲染（在估值加载完成后调用）
   private sortAndRender(): void {
-    if (!this.container) return;
-    const tbody = this.container.querySelector('#fund-table-body');
-    if (!tbody) return;
-
-    const funds = this.getSortedFunds();
-    tbody.innerHTML = funds.map(fund => this.renderFundRow(fund)).join('');
-  }
-
-  private updateTableBody(): void {
     if (!this.container) return;
     const tbody = this.container.querySelector('#fund-table-body');
     if (!tbody) return;

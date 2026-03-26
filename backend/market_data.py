@@ -477,18 +477,36 @@ class StockPriceAPI:
         # ===== 数据源 3: AkShare (备份) =====
         try:
             if not is_hk and not is_us:
-                stock_df = ak.stock_zh_a_spot_em()
-                stock_data = stock_df[stock_df["代码"] == code]
-                if not stock_data.empty:
-                    row = stock_data.iloc[0]
+                def _fetch_akshare_stock():
+                    stock_df = ak.stock_zh_a_spot_em()
+                    stock_data = stock_df[stock_df["代码"] == code]
+                    if not stock_data.empty:
+                        row = stock_data.iloc[0]
+                        return {
+                            'name': row["名称"],
+                            'price': float(row["最新价"]),
+                            'change': float(row["涨跌额"]),
+                            'change_percent': float(row["涨跌幅"]),
+                        }
+                    return None
+
+                # 使用 to_thread 运行同步代码，并设置超时
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(_fetch_akshare_stock),
+                    timeout=15.0
+                )
+
+                if result:
                     return MarketData(
                         code=code,
-                        name=row["名称"],
-                        price=float(row["最新价"]),
-                        change=float(row["涨跌额"]),
-                        change_percent=float(row["涨跌幅"]),
+                        name=result['name'],
+                        price=result['price'],
+                        change=result['change'],
+                        change_percent=result['change_percent'],
                         timestamp=datetime.now(),
                     )
+        except asyncio.TimeoutError:
+            logger.debug(f"AkShare stock API timeout for {code}")
         except Exception as e:
             logger.debug(f"AkShare stock API error: {e}")
 
@@ -1590,10 +1608,19 @@ class BondIndexAPI:
 
             # 中债综合指数
             if index_code in ["CBA00101", "bond_index", "中债综合指数"]:
-                # 注意：AkShare 的债券指数数据可能是日频的，不是实时的
-                data = ak.bond_composite_index_cbond()
-                if data is not None and len(data) > 0:
-                    latest = data.iloc[-1]
+                def _fetch_bond_index():
+                    data = ak.bond_composite_index_cbond()
+                    if data is not None and len(data) > 0:
+                        return data.iloc[-1]
+                    return None
+
+                # 使用 to_thread 运行同步代码，并设置超时
+                latest = await asyncio.wait_for(
+                    asyncio.to_thread(_fetch_bond_index),
+                    timeout=15.0
+                )
+
+                if latest is not None:
                     logger.debug(f"AkShare 债券指数成功：data={latest}")
                     return {
                         "code": index_code,
@@ -1603,6 +1630,8 @@ class BondIndexAPI:
                         "source": "akshare",
                         "note": "AkShare 提供的是日频数据，非实时",
                     }
+        except asyncio.TimeoutError:
+            logger.debug(f"AkShare 债券指数 API timeout for {index_code}")
         except Exception as e:
             logger.debug(f"AkShare 债券指数 API error: {e}")
 
@@ -1734,15 +1763,11 @@ class GlobalIndexAPI:
                         parts = match.group(1).split(",")
                         if len(parts) >= 7:
                             name = parts[0]
-                            previous_close = float(parts[2]) if parts[2] else 0
-                            price = float(parts[3]) if parts[3] else 0
-
-                            # 计算涨跌幅
-                            if previous_close > 0:
-                                change = price - previous_close
-                                change_percent = (change / previous_close * 100)
-                            else:
-                                change = 0
+                            # 新浪全球指数接口格式：name,price,change_percent,change,volume,...
+                            # parts[1] = 当前价, parts[2] = 涨跌幅(%), parts[3] = 涨跌额
+                            price = float(parts[1]) if parts[1] else 0
+                            change_percent = float(parts[2]) if parts[2] else 0
+                            change = float(parts[3]) if parts[3] else 0
 
                             logger.debug(f"新浪海外指数 {index_code} 成功：price={price}, change_percent={change_percent}%")
                             return {
@@ -1797,13 +1822,22 @@ class GlobalIndexAPI:
         try:
             yf_code = index_info.get("yf", index_info.get("code", ""))
             if yf_code:
-                ticker = yf.Ticker(yf_code)
-                hist = ticker.history(period="1d")
-                if not hist.empty:
-                    price = float(hist["Close"].iloc[-1])
+                def _fetch_yfinance():
+                    ticker = yf.Ticker(yf_code)
+                    hist = ticker.history(period="1d")
+                    if not hist.empty:
+                        price = float(hist["Close"].iloc[-1])
+                        info = ticker.info
+                        return price, info
+                    return None, None
 
-                    # 获取前一日收盘价
-                    info = ticker.info
+                # 使用 to_thread 运行同步代码，并设置超时
+                price, info = await asyncio.wait_for(
+                    asyncio.to_thread(_fetch_yfinance),
+                    timeout=10.0
+                )
+
+                if price is not None and info is not None:
                     prev_close = info.get("previousClose", price)
                     change = price - prev_close
                     change_percent = (change / prev_close * 100) if prev_close else 0
@@ -1816,6 +1850,8 @@ class GlobalIndexAPI:
                         "change_percent": round(change_percent, 2),
                         "change": round(change, 2),
                     }
+        except asyncio.TimeoutError:
+            logger.debug(f"yfinance 指数 {index_code} 超时")
         except Exception as e:
             logger.debug(f"yfinance index API error: {e}")
 
@@ -1833,7 +1869,7 @@ class GlobalIndexAPI:
                             name = parts[1] if len(parts) > 1 else index_info["name"]
                             price = float(parts[3]) if len(parts) > 3 and parts[3] else 0
                             previous_close = float(parts[4]) if len(parts) > 4 and parts[4] else 0
-                            change_percent = float(parts[6]) if len(parts) > 6 and parts[6] else 0
+                            change_percent = float(parts[32]) if len(parts) > 32 and parts[32] else 0
 
                             logger.debug(f"腾讯海外指数 {index_code} 成功：price={price}, change_percent={change_percent}%")
                             return {
@@ -1847,6 +1883,25 @@ class GlobalIndexAPI:
             logger.debug(f"Tencent global index API error: {e}")
 
         logger.warning(f"海外指数 {index_code} 所有数据源均失败")
+
+        # ===== 数据源 5: 指数回退机制 (当特定指数失效时使用替代指数) =====
+        fallback_map = {
+            "hshk_dividend": "hsi",  # 恒生港股通高股息 -> 恒生指数
+            "sp_hkconnect": "hsi",   # 标普港股通低波红利 -> 恒生指数
+        }
+
+        if index_code in fallback_map:
+            fallback_code = fallback_map[index_code]
+            logger.info(f"指数 {index_code} 所有数据源失败，尝试使用替代指数 {fallback_code}")
+            fallback_data = await self.get_global_index_realtime_data(fallback_code)
+            if fallback_data:
+                # 保留原指数代码，但使用替代指数的数据
+                fallback_data["code"] = index_code
+                fallback_data["name"] = index_info["name"]
+                fallback_data["fallback_from"] = fallback_code
+                logger.info(f"指数 {index_code} 使用替代指数 {fallback_code} 数据成功")
+                return fallback_data
+
         return None
 
     async def _get_investing_index_data(self, investing_code: str, index_name: str) -> Optional[Dict[str, Any]]:
@@ -2267,30 +2322,41 @@ class ETFPriceAPI:
         # 注意：AkShare 可能需要较长时间加载，作为最后的备用方案
         try:
             logger.debug(f"尝试使用 AkShare 获取 ETF {code} 数据...")
-            # 使用同步方式调用 akshare（在 async 函数中使用 run_in_executor）
-            loop = asyncio.get_event_loop()
-            df = await loop.run_in_executor(None, ak.fund_etf_spot_em)
 
-            if df is not None and len(df) > 0:
-                # 查找匹配的 ETF
-                etf_row = df[df['代码'] == code]
-                if len(etf_row) > 0:
-                    row = etf_row.iloc[0]
-                    price = float(row.get('最新价', 0))
-                    change_percent = float(row.get('涨跌幅', 0))
-                    previous_close = float(row.get('昨收', 0)) if '昨收' in row else float(row.get('昨收价', 0))
+            def _fetch_akshare():
+                df = ak.fund_etf_spot_em()
+                if df is not None and len(df) > 0:
+                    etf_row = df[df['代码'] == code]
+                    if len(etf_row) > 0:
+                        row = etf_row.iloc[0]
+                        return {
+                            'price': float(row.get('最新价', 0)),
+                            'change_percent': float(row.get('涨跌幅', 0)),
+                            'previous_close': float(row.get('昨收', 0)) if '昨收' in row else float(row.get('昨收价', 0)),
+                            'name': row.get('名称', code),
+                        }
+                return None
 
-                    result = {
-                        "code": code,
-                        "name": row.get('名称', code),
-                        "price": price,
-                        "change": price * change_percent / 100 if change_percent else 0,
-                        "change_percent": change_percent,
-                        "previous_close": previous_close,
-                    }
-                    logger.debug(f"ETF {code} 数据获取成功（AkShare）：price={price}, change={change_percent}%")
-                    self._set_cache(cache_key, result, ttl)
-                    return result
+            # 使用 to_thread 运行同步代码，并设置超时
+            result = await asyncio.wait_for(
+                asyncio.to_thread(_fetch_akshare),
+                timeout=15.0
+            )
+
+            if result:
+                logger.debug(f"ETF {code} 数据获取成功（AkShare）：price={result['price']}, change={result['change_percent']}%")
+                result_data = {
+                    "code": code,
+                    "name": result['name'],
+                    "price": result['price'],
+                    "change": result['price'] * result['change_percent'] / 100 if result['change_percent'] else 0,
+                    "change_percent": result['change_percent'],
+                    "previous_close": result['previous_close'],
+                }
+                self._set_cache(cache_key, result_data, ttl)
+                return result_data
+        except asyncio.TimeoutError:
+            logger.debug(f"AkShare ETF API timeout for {code}")
         except Exception as e:
             logger.debug(f"AkShare ETF API error for {code}: {e}")
 
