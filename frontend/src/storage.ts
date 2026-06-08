@@ -3,7 +3,9 @@ import type { Fund } from './types';
 export class StorageService {
   private static readonly FUNDS_KEY = 'fund_valuation_funds';
   private static readonly REFRESH_INTERVAL_KEY = 'fund_valuation_refresh_interval';
+  private static readonly MARKET_CACHE_TTL_KEY = 'fund_valuation_market_cache_ttl';
   private static readonly DEFAULT_REFRESH_INTERVAL = 60000; // 默认1分钟
+  private static readonly DEFAULT_MARKET_CACHE_TTL = 60000; // 默认1分钟
 
   // 保存基金数据到本地存储
   static saveFunds(funds: Fund[]): void {
@@ -69,5 +71,21 @@ export class StorageService {
   // 清除刷新间隔设置
   static clearRefreshInterval(): void {
     localStorage.removeItem(this.REFRESH_INTERVAL_KEY);
+  }
+
+  // 保存市场数据缓存时间到本地存储
+  static saveMarketCacheTtl(ttl: number): void {
+    localStorage.setItem(this.MARKET_CACHE_TTL_KEY, ttl.toString());
+  }
+
+  // 从本地存储加载市场数据缓存时间
+  static loadMarketCacheTtl(): number {
+    const data = localStorage.getItem(this.MARKET_CACHE_TTL_KEY);
+    return data ? parseInt(data, 10) : this.DEFAULT_MARKET_CACHE_TTL;
+  }
+
+  // 清除市场数据缓存时间设置
+  static clearMarketCacheTtl(): void {
+    localStorage.removeItem(this.MARKET_CACHE_TTL_KEY);
   }
 }

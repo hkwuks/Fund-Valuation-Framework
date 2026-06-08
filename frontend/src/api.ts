@@ -3,8 +3,7 @@ import type { Fund, ValuationResult, MarketData, FundData } from './types';
 const API_BASE = '/api';
 
 class ApiService {
-  private abortController: AbortController | null = null;
-  private requestCount: number = 0;
+  private abortControllers: Map<string, AbortController> = new Map();
 
   constructor() {
     this.setupPageUnloadHandler();
@@ -19,25 +18,38 @@ class ApiService {
     window.addEventListener('pagehide', cancelAllRequests);
   }
 
-  private createAbortController(): AbortController {
-    if (!this.abortController || this.abortController.signal.aborted) {
-      this.abortController = new AbortController();
-      this.requestCount = 0;
+  private getAbortController(key: string): AbortController {
+    // 如果存在旧的 controller，先取消它
+    const oldController = this.abortControllers.get(key);
+    if (oldController && !oldController.signal.aborted) {
+      oldController.abort();
     }
-    this.requestCount++;
-    return this.abortController;
+    // 创建新的 controller
+    const controller = new AbortController();
+    this.abortControllers.set(key, controller);
+    return controller;
   }
 
   cancelAllRequests(): void {
-    if (this.abortController && !this.abortController.signal.aborted) {
-      this.abortController.abort();
-      console.log(`已取消 ${this.requestCount} 个进行中的请求`);
+    for (const [, controller] of this.abortControllers) {
+      if (!controller.signal.aborted) {
+        controller.abort();
+      }
     }
+    this.abortControllers.clear();
+    console.log('已取消所有进行中的请求');
   }
 
-  async request<T>(url: string, options?: RequestInit): Promise<T> {
-    const controller = this.createAbortController();
-    
+  async request<T>(url: string, options?: RequestInit, timeoutMs: number = 30000): Promise<T> {
+    // 每个 URL 使用独立的 AbortController
+    const controller = this.getAbortController(url);
+
+    // 设置超时
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+      console.log(`请求超时: ${API_BASE}${url}`);
+    }, timeoutMs);
+
     try {
       const response = await fetch(`${API_BASE}${url}`, {
         headers: {
@@ -48,12 +60,18 @@ class ApiService {
         signal: controller.signal,
       });
 
+      // 请求完成后清理 controller 和超时
+      clearTimeout(timeoutId);
+      this.abortControllers.delete(url);
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
       return response.json();
     } catch (error) {
+      clearTimeout(timeoutId);
+      this.abortControllers.delete(url);
       if (error instanceof Error && error.name === 'AbortError') {
         console.log(`请求已取消: ${API_BASE}${url}`);
         throw new Error('请求已取消');
@@ -99,7 +117,7 @@ class ApiService {
 
   // 基金信息相关 API
   async getFundData(fundCode: string): Promise<FundData> {
-    const response = await this.request<{ success: boolean; data: FundData }>(`/funds/${fundCode}`);
+    const response = await this.request<{ success: boolean; message?: string; data: FundData }>(`/funds/${fundCode}`);
     if (!response.success) {
       throw new Error(response.message || 'Failed to get fund data');
     }
@@ -132,7 +150,7 @@ class ApiService {
 
   // 估值相关 API
   async getFundValuation(fundCode: string, preferHoldings: boolean = true): Promise<ValuationResult> {
-    const response = await this.request<{ success: boolean; data: ValuationResult }>(
+    const response = await this.request<{ success: boolean; message?: string; data: ValuationResult }>(
       `/valuation/${fundCode}?prefer_holdings=${preferHoldings}`
     );
     if (!response.success) {
@@ -265,28 +283,24 @@ class ApiService {
   }
 
   // 市场数据相关 API
-  async getStockPrice(stockCode: string): Promise<MarketData> {
-    const response = await this.request<{ success: boolean; data: MarketData }>(`/market/stock/${stockCode}`);
-    if (!response.success) {
-      throw new Error(response.message || 'Failed to get stock price');
-    }
-    return response.data;
+  async getStockPrice(stockCode: string): Promise<{ success: boolean; data: MarketData; message?: string }> {
+    return this.request<{ success: boolean; data: MarketData; message?: string }>(`/market/stock/${stockCode}`);
   }
 
-  async getEtfPrice(etfCode: string): Promise<{ success: boolean; data: any }> {
-    return this.request<{ success: boolean; data: any }>(`/market/etf/${etfCode}`);
+  async getEtfPrice(etfCode: string): Promise<{ success: boolean; data: any; message?: string }> {
+    return this.request<{ success: boolean; data: any; message?: string }>(`/market/etf/${etfCode}`);
   }
 
-  async getIndexPrice(indexCode: string): Promise<{ success: boolean; data: any }> {
-    return this.request<{ success: boolean; data: any }>(`/market/index/${indexCode}`);
+  async getIndexPrice(indexCode: string): Promise<{ success: boolean; data: any; message?: string }> {
+    return this.request<{ success: boolean; data: any; message?: string }>(`/market/index/${indexCode}`);
   }
 
-  async getGlobalIndexPrice(indexCode: string): Promise<{ success: boolean; data: any }> {
-    return this.request<{ success: boolean; data: any }>(`/market/global-index/${indexCode}`);
+  async getGlobalIndexPrice(indexCode: string): Promise<{ success: boolean; data: any; message?: string }> {
+    return this.request<{ success: boolean; data: any; message?: string }>(`/market/global-index/${indexCode}`);
   }
 
-  async getSupportedIndices(): Promise<{ success: boolean; data: any }> {
-    return this.request<{ success: boolean; data: any }>('/market/indices');
+  async getSupportedIndices(): Promise<{ success: boolean; data: { domestic: Record<string, string>; global: Record<string, string> }; message?: string }> {
+    return this.request<{ success: boolean; data: { domestic: Record<string, string>; global: Record<string, string> }; message?: string }>('/market/indices');
   }
 
   async clearCache(): Promise<{ success: boolean; message: string }> {
@@ -295,6 +309,231 @@ class ApiService {
     });
   }
 
+  // 获取价格历史
+  async getPriceHistory(code: string, dataType: string = 'index', days: number = 30): Promise<{ success: boolean; data: { code: string; type: string; days: number; history: { timestamp: string; price: number }[] } }> {
+    return this.request<{ success: boolean; data: { code: string; type: string; days: number; history: { timestamp: string; price: number }[] } }>(`/market/price-history/${code}?data_type=${dataType}&days=${days}`);
+  }
+
+  // 批量查询 API - 使用更长的超时时间(60秒)
+  async getStockPriceBatch(stockCodes: string[]): Promise<{ success: boolean; data: any[]; message?: string }> {
+    return this.request<{ success: boolean; data: any[]; message?: string }>('/market/stock/batch', {
+      method: 'POST',
+      body: JSON.stringify(stockCodes),
+    }, 60000);
+  }
+
+  async getIndexPriceBatch(indexCodes: string[]): Promise<{ success: boolean; data: any[]; message?: string }> {
+    return this.request<{ success: boolean; data: any[]; message?: string }>('/market/index/batch', {
+      method: 'POST',
+      body: JSON.stringify(indexCodes),
+    }, 60000);
+  }
+
+  async getGlobalIndexPriceBatch(indexCodes: string[]): Promise<{ success: boolean; data: any[]; message?: string }> {
+    return this.request<{ success: boolean; data: any[]; message?: string }>('/market/global-index/batch', {
+      method: 'POST',
+      body: JSON.stringify(indexCodes),
+    }, 60000);
+  }
+
+  async getEtfPriceBatch(etfCodes: string[]): Promise<{ success: boolean; data: any[]; message?: string }> {
+    return this.request<{ success: boolean; data: any[]; message?: string }>('/market/etf/batch', {
+      method: 'POST',
+      body: JSON.stringify(etfCodes),
+    }, 60000);
+  }
+
+  // 分批加载 API - 支持外部 signal 用于取消
+  async getIndexBatchWithSignal(
+    indexCodes: string[],
+    signal?: AbortSignal
+  ): Promise<{ success: boolean; data: any[]; message?: string }> {
+    return fetch(`${API_BASE}/market/index/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(indexCodes),
+      signal,
+    }).then(r => r.json());
+  }
+
+  async getGlobalIndexBatchWithSignal(
+    indexCodes: string[],
+    signal?: AbortSignal
+  ): Promise<{ success: boolean; data: any[]; message?: string }> {
+    return fetch(`${API_BASE}/market/global-index/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(indexCodes),
+      signal,
+    }).then(r => r.json());
+  }
+
+  // 带重试的请求方法
+  async requestWithRetry<T>(url: string, options?: RequestInit, maxRetries: number = 3): Promise<T> {
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await this.request<T>(url, options);
+      } catch (error) {
+        lastError = error as Error;
+        if (attempt < maxRetries - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+        }
+      }
+    }
+
+    throw lastError || new Error('Request failed after retries');
+  }
+
+  // SSE 流式批量获取指数行情
+  async getIndexBatchStream(
+    indexCodes: string[],
+    callbacks: {
+      onIndex?: (result: { code: string; success: boolean; data?: any; cached?: boolean; message?: string }) => void;
+      onProgress?: (progress: { current: number; total: number; successCount: number; failedCount: number }) => void;
+      onComplete?: (summary: { total: number; successCount: number; failedCount: number }) => void;
+      onError?: (code: string, message: string) => void;
+    },
+    signal?: AbortSignal
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      // 处理取消信号
+      if (signal?.aborted) {
+        reject(new Error('请求已取消'));
+        return;
+      }
+
+      const abortHandler = () => {
+        reject(new Error('请求已取消'));
+      };
+      signal?.addEventListener('abort', abortHandler);
+
+      // 由于 EventSource 不支持 POST，我们使用 fetch + ReadableStream
+      this.fetchSSE(`${API_BASE}/market/index/batch/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(indexCodes),
+        signal,
+      }, (event, data) => {
+        switch (event) {
+          case 'index':
+            callbacks.onIndex?.(data);
+            break;
+          case 'progress':
+            callbacks.onProgress?.(data);
+            break;
+          case 'complete':
+            callbacks.onComplete?.(data);
+            signal?.removeEventListener('abort', abortHandler);
+            resolve();
+            break;
+          case 'error':
+            callbacks.onError?.(data.code, data.message);
+            break;
+        }
+      }).then(() => {
+        signal?.removeEventListener('abort', abortHandler);
+        resolve();
+      }).catch((error) => {
+        signal?.removeEventListener('abort', abortHandler);
+        reject(error);
+      });
+    });
+  }
+
+  // SSE 流式批量获取海外指数行情
+  async getGlobalIndexBatchStream(
+    indexCodes: string[],
+    callbacks: {
+      onIndex?: (result: { code: string; success: boolean; data?: any; cached?: boolean; message?: string }) => void;
+      onProgress?: (progress: { current: number; total: number; successCount: number; failedCount: number }) => void;
+      onComplete?: (summary: { total: number; successCount: number; failedCount: number }) => void;
+      onError?: (code: string, message: string) => void;
+    },
+    signal?: AbortSignal
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      // 处理取消信号
+      if (signal?.aborted) {
+        reject(new Error('请求已取消'));
+        return;
+      }
+
+      const abortHandler = () => {
+        reject(new Error('请求已取消'));
+      };
+      signal?.addEventListener('abort', abortHandler);
+
+      this.fetchSSE(`${API_BASE}/market/global-index/batch/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(indexCodes),
+        signal,
+      }, (event, data) => {
+        switch (event) {
+          case 'index':
+            callbacks.onIndex?.(data);
+            break;
+          case 'progress':
+            callbacks.onProgress?.(data);
+            break;
+          case 'complete':
+            callbacks.onComplete?.(data);
+            break;
+          case 'error':
+            callbacks.onError?.(data.code, data.message);
+            break;
+        }
+      }).then(() => {
+        signal?.removeEventListener('abort', abortHandler);
+        resolve();
+      }).catch((error) => {
+        signal?.removeEventListener('abort', abortHandler);
+        reject(error);
+      });
+    });
+  }
+
+  // 通用的 SSE fetch 方法
+  private async fetchSSE(
+    url: string,
+    options: RequestInit,
+    onEvent: (event: string, data: any) => void
+  ): Promise<void> {
+    const response = await fetch(url, options);
+
+    if (!response.body) {
+      throw new Error('No response body');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+
+        // 解析 SSE 事件
+        const eventMatch = line.match(/^event:\s*(\w+)$/m);
+        const dataMatch = line.match(/^data:\s*(.+)$/m);
+
+        if (eventMatch && dataMatch) {
+          const event = eventMatch[1];
+          const data = JSON.parse(dataMatch[1]);
+          onEvent(event, data);
+        }
+      }
+    }
+  }
   // 黄金预测相关 API
   async getGoldCurrent(): Promise<{ success: boolean; data: any }> {
     return this.request<{ success: boolean; data: any }>('/gold/current');
@@ -309,41 +548,23 @@ class ApiService {
   async runGoldBacktest(years: number, horizonDays: number = 1, method: string = 'walk_forward'): Promise<{ success: boolean; data: any; error_message?: string }> {
     return this.request<{ success: boolean; data: any; error_message?: string }>(`/gold/backtest?years=${years}&horizon_days=${horizonDays}&method=${method}`, {
       method: 'POST',
-    });
+    }, 300000);
   }
 
-  async predictTripleBarrier(modelType: string = 'lightgbm'): Promise<{ success: boolean; data: any; error_message?: string }> {
+  async predictGoldTB(modelType: string = 'lightgbm'): Promise<{ success: boolean; data: any; error_message?: string }> {
     return this.request<{ success: boolean; data: any; error_message?: string }>(`/gold/predict-tb?symbol=GC&model_type=${modelType}`, {
       method: 'POST',
     });
   }
 
-  async runTrendBacktest(years: number = 2, fastMa: number = 50, slowMa: number = 200, slMultiplier: number = 2.0): Promise<{ success: boolean; data: any; error_message?: string }> {
+  async runGoldTrendBacktest(years: number, fastMa: number = 50, slowMa: number = 200, slMultiplier: number = 2.0): Promise<{ success: boolean; data: any; error_message?: string }> {
     return this.request<{ success: boolean; data: any; error_message?: string }>(`/gold/backtest-trend?years=${years}&fast_ma=${fastMa}&slow_ma=${slowMa}&sl_multiplier=${slMultiplier}`, {
       method: 'POST',
-    });
+    }, 300000);
   }
 
-  async getTrendSignal(): Promise<{ success: boolean; data: any }> {
+  async getGoldTrendSignal(): Promise<{ success: boolean; data: any }> {
     return this.request<{ success: boolean; data: any }>('/gold/trend-signal?symbol=GC');
-  }
-
-  // 带重试的请求方法
-  async requestWithRetry<T>(url: string, options?: RequestInit, maxRetries: number = 3): Promise<T> {
-    let lastError: Error;
-
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        return await this.request<T>(url, options);
-      } catch (error) {
-        lastError = error as Error;
-        if (attempt < maxRetries - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
-        }
-      }
-    }
-
-    throw lastError;
   }
 }
 

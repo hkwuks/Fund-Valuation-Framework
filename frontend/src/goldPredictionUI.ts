@@ -349,7 +349,7 @@ export class GoldPredictionUI {
     }
 
     try {
-      const response = await api.predictTripleBarrier(modelType)
+      const response = await api.predictGoldTB(modelType)
       if (response.success && response.data) {
         this.displayTbResults(response.data)
         toast.success('TB预测完成')
@@ -410,7 +410,7 @@ export class GoldPredictionUI {
 
   private async loadTrendSignal() {
     try {
-      const response = await api.getTrendSignal()
+      const response = await api.getGoldTrendSignal()
       if (response.success && response.data) {
         this.displayTrendSignal(response.data)
         toast.success('趋势信号已更新')
@@ -680,7 +680,7 @@ export class GoldPredictionUI {
     }
 
     try {
-      const response = await api.runTrendBacktest(years, fastMa, slowMa)
+      const response = await api.runGoldTrendBacktest(years, fastMa, slowMa)
       if (response.success && response.data) {
         this.displayTrendBacktestResults(response.data)
         toast.success('趋势回测完成')

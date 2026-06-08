@@ -1,17 +1,81 @@
 import { api } from './api';
 import { toast } from './toast';
+import { StorageService } from './storage';
 import type { MarketData } from './types';
 
+interface CacheConfig {
+  ttl: number; // 缓存时间（毫秒）
+  lastUpdate: number;
+  data: any;
+}
+
 class MarketDataUI {
-  private container: HTMLDivElement;
+  private container!: HTMLDivElement;
   private currentTab: string = 'indices';
+  private previousTab: string = 'indices'; // 记录返回来源
   private marketData: Record<string, MarketData> = {};
   private supportedIndices: any = null;
+  private isDataLoaded: boolean = false;
+
+  // 前端缓存
+  private cache: Map<string, CacheConfig> = new Map();
+  private defaultCacheTtl: number;
+
+  constructor() {
+    // 从 localStorage 加载缓存时间设置
+    this.defaultCacheTtl = StorageService.loadMarketCacheTtl();
+  }
+
+  // 分批加载相关
+  private abortControllers: AbortController[] = [];
+  private loadedCount: number = 0;
+  private totalCount: number = 0;
 
   init(container: HTMLDivElement) {
     this.container = container;
     this.render();
-    this.loadSupportedIndices();
+    this.setupLazyLoading();
+  }
+
+  private setupLazyLoading() {
+    // 监听标签切换事件，当切换到市场数据标签页时加载数据
+    const marketDataTabButton = document.querySelector<HTMLButtonElement>('.tab-button[data-tab="market-data"]');
+    if (marketDataTabButton) {
+      marketDataTabButton.addEventListener('click', () => {
+        if (!this.isDataLoaded) {
+          this.loadSupportedIndices();
+        }
+      });
+    }
+
+    // 检查当前是否已经在市场数据标签页（直接刷新页面的情况）
+    const marketDataContainer = document.getElementById('market-data-container');
+    if (marketDataContainer && marketDataContainer.classList.contains('active')) {
+      if (!this.isDataLoaded) {
+        this.loadSupportedIndices();
+      }
+    }
+  }
+
+  // 获取缓存数据
+  private getCachedData(key: string): any | null {
+    const cached = this.cache.get(key);
+    if (cached) {
+      const now = Date.now();
+      if (now - cached.lastUpdate < cached.ttl) {
+        return cached.data;
+      }
+    }
+    return null;
+  }
+
+  // 设置缓存数据
+  private setCachedData(key: string, data: any, ttl?: number) {
+    this.cache.set(key, {
+      ttl: ttl || this.defaultCacheTtl,
+      lastUpdate: Date.now(),
+      data
+    });
   }
 
   private render() {
@@ -24,6 +88,20 @@ class MarketDataUI {
               <span class="card-title-icon">🌍</span>
               市场数据
             </h3>
+            <div class="cache-controls">
+              <label class="cache-ttl-label">
+                缓存时间:
+                <select id="cache-ttl-select" class="cache-ttl-select">
+                  <option value="30000" ${this.defaultCacheTtl === 30000 ? 'selected' : ''}>30秒</option>
+                  <option value="60000" ${this.defaultCacheTtl === 60000 ? 'selected' : ''}>1分钟</option>
+                  <option value="120000" ${this.defaultCacheTtl === 120000 ? 'selected' : ''}>2分钟</option>
+                  <option value="300000" ${this.defaultCacheTtl === 300000 ? 'selected' : ''}>5分钟</option>
+                </select>
+              </label>
+              <button id="refresh-cache-btn" class="btn btn-primary btn-sm">
+                🔄 刷新
+              </button>
+            </div>
           </div>
           <div class="card-body">
             <div class="market-tabs">
@@ -67,10 +145,6 @@ class MarketDataUI {
             ${this.renderIndicesLoader()}
           </div>
         </div>
-
-        <button id="clear-cache-button" class="clear-cache-button btn btn-secondary">
-          🗑️ 清除缓存
-        </button>
       </div>
     `;
   }
@@ -120,6 +194,9 @@ class MarketDataUI {
       button.addEventListener('click', () => {
         this.currentTab = button.dataset.tab || 'indices';
         this.render();
+        if (this.currentTab === 'indices') {
+          this.loadSupportedIndices();
+        }
       });
     });
 
@@ -131,17 +208,21 @@ class MarketDataUI {
       });
     }
 
-    // 清除缓存按钮事件
-    const clearCacheButton = this.container.querySelector<HTMLButtonElement>('#clear-cache-button');
-    if (clearCacheButton) {
-      clearCacheButton.addEventListener('click', async () => {
-        const success = await api.clearCache();
-        if (success) {
-          toast.success('缓存清除成功');
-          this.loadSupportedIndices();
-        } else {
-          toast.error('缓存清除失败');
-        }
+    // 刷新按钮事件
+    const refreshCacheBtn = this.container.querySelector<HTMLButtonElement>('#refresh-cache-btn');
+    if (refreshCacheBtn) {
+      refreshCacheBtn.addEventListener('click', () => {
+        this.handleRefresh();
+      });
+    }
+
+    // 缓存时间选择事件
+    const cacheTtlSelect = this.container.querySelector<HTMLSelectElement>('#cache-ttl-select');
+    if (cacheTtlSelect) {
+      cacheTtlSelect.addEventListener('change', () => {
+        this.defaultCacheTtl = parseInt(cacheTtlSelect.value, 10);
+        StorageService.saveMarketCacheTtl(this.defaultCacheTtl);
+        toast.success(`缓存时间已设置为 ${this.formatTtl(this.defaultCacheTtl)}`);
       });
     }
 
@@ -149,9 +230,12 @@ class MarketDataUI {
     const backButton = this.container.querySelector<HTMLButtonElement>('#back-to-indices');
     if (backButton) {
       backButton.addEventListener('click', () => {
-        this.currentTab = 'indices';
+        // 返回到之前的标签
+        this.currentTab = this.previousTab;
         this.render();
-        this.loadSupportedIndices();
+        if (this.currentTab === 'indices') {
+          this.loadSupportedIndices();
+        }
       });
     }
 
@@ -166,11 +250,51 @@ class MarketDataUI {
     }
   }
 
-  private async loadSupportedIndices() {
+  private formatTtl(ms: number): string {
+    if (ms < 60000) {
+      return `${ms / 1000}秒`;
+    }
+    return `${ms / 60000}分钟`;
+  }
+
+  // 处理刷新按钮点击
+  private async handleRefresh() {
+    // 清除前端缓存
+    this.cache.clear();
+    this.marketData = {};
+    this.isDataLoaded = false;
+
+    toast.success('正在刷新数据...');
+
+    // 重新加载数据（强制刷新，跳过缓存检查）
+    await this.loadSupportedIndices(true);
+  }
+
+  private async loadSupportedIndices(forceRefresh: boolean = false) {
     try {
-      this.supportedIndices = await api.getSupportedIndices();
-      if (this.supportedIndices) {
+      // 检查缓存
+      if (!forceRefresh) {
+        const cached = this.getCachedData('supportedIndices');
+        if (cached) {
+          console.log('使用缓存的指数列表:', cached);
+          this.supportedIndices = cached;
+          this.isDataLoaded = true;
+          this.renderIndices();
+          return;
+        }
+      }
+
+      console.log('正在请求指数列表...');
+      const response = await api.getSupportedIndices();
+      console.log('指数列表响应:', response);
+      if (response && response.success) {
+        this.supportedIndices = response.data;
+        this.isDataLoaded = true;
+        // 缓存数据
+        this.setCachedData('supportedIndices', response.data);
         this.renderIndices();
+      } else {
+        console.error('获取指数列表失败:', response);
       }
     } catch (error) {
       console.error('加载支持的指数列表失败', error);
@@ -178,89 +302,295 @@ class MarketDataUI {
   }
 
   private async renderIndices() {
-    if (!this.supportedIndices) return;
+    console.log('renderIndices 被调用, supportedIndices:', this.supportedIndices);
+    if (!this.supportedIndices) {
+      console.log('supportedIndices 为空，不渲染');
+      return;
+    }
+
+    // 取消之前的请求
+    this.cancelAllRequests();
+    this.loadedCount = 0;
 
     const domesticIndicesContainer = this.container.querySelector('#domestic-indices');
     const globalIndicesContainer = this.container.querySelector('#global-indices');
+    console.log('DOM 容器:', { domestic: domesticIndicesContainer, global: globalIndicesContainer });
+
+    // 收集所有需要查询的指数代码
+    const domesticCodes: string[] = [];
+    const globalCodes: string[] = [];
+    const domesticIndexMap: Record<string, string> = {};
+    const globalIndexMap: Record<string, string> = {};
 
     if (domesticIndicesContainer) {
       domesticIndicesContainer.innerHTML = '';
-      if (this.supportedIndices.domestic) {
-        for (const index of this.supportedIndices.domestic) {
-          const indexElement = this.createIndexElement(index, false);
-          domesticIndicesContainer.appendChild(indexElement);
+      const domestic = this.supportedIndices.domestic;
+      console.log('国内指数数据:', domestic);
+      if (domestic && typeof domestic === 'object') {
+        for (const [code, name] of Object.entries(domestic)) {
+          domesticCodes.push(code);
+          domesticIndexMap[code] = name as string;
         }
       }
     }
 
     if (globalIndicesContainer) {
       globalIndicesContainer.innerHTML = '';
-      if (this.supportedIndices.global) {
-        for (const index of this.supportedIndices.global) {
-          const indexElement = this.createIndexElement(index, true);
-          globalIndicesContainer.appendChild(indexElement);
+      const global = this.supportedIndices.global;
+      console.log('海外指数数据:', global);
+      if (global && typeof global === 'object') {
+        for (const [code, name] of Object.entries(global)) {
+          globalCodes.push(code);
+          globalIndexMap[code] = name as string;
         }
       }
     }
+
+    this.totalCount = domesticCodes.length + globalCodes.length;
+    console.log('收集到的代码:', { domesticCodes, globalCodes });
+    console.log('指数名称映射:', { domesticIndexMap, globalIndexMap });
+
+    // 并行加载国内和海外指数（SSE流式支持真正的并行）
+    await Promise.all([
+      this.loadDomesticIndicesBatched(domesticCodes, domesticIndexMap, domesticIndicesContainer),
+      this.loadGlobalIndicesBatched(globalCodes, globalIndexMap, globalIndicesContainer)
+    ]);
   }
 
-  private async createIndexElement(index: any, isGlobal: boolean) {
-    const indexElement = document.createElement('div');
-    indexElement.className = 'index-card';
-    indexElement.innerHTML = this.renderIndicesLoader();
+  private cancelAllRequests() {
+    for (const controller of this.abortControllers) {
+      controller.abort();
+    }
+    this.abortControllers = [];
+  }
 
-    try {
-      let marketData: MarketData | null;
-      if (isGlobal) {
-        marketData = await api.getGlobalIndexPrice(index.code);
-      } else {
-        marketData = await api.getIndexPrice(index.code);
-      }
+  private updateLoadingProgress() {
+    this.loadedCount++;
+    const progress = Math.round((this.loadedCount / this.totalCount) * 100);
+    console.log(`加载进度: ${this.loadedCount}/${this.totalCount} (${progress}%)`);
+  }
 
-      if (marketData) {
-        this.marketData[marketData.code] = marketData;
-        indexElement.innerHTML = this.renderIndexCard(marketData);
-        indexElement.addEventListener('click', () => {
-          this.showMarketDetails(marketData!);
-        });
-      } else {
-        indexElement.innerHTML = `
-          <div class="index-card error">
-            <h4>${index.name}</h4>
-            <p class="code">${index.code}</p>
-            <p class="error-message">⚠️ 获取数据失败</p>
-          </div>
-        `;
-      }
-    } catch (error) {
-      console.error(`获取指数数据失败：${index.code}`, error);
+  // 使用 SSE 流式加载国内指数
+  private async loadDomesticIndicesBatched(
+    codes: string[],
+    indexMap: Record<string, string>,
+    container: Element | null
+  ) {
+    if (codes.length === 0 || !container) return;
+
+    // 创建 AbortController 用于取消请求
+    const controller = new AbortController();
+    this.abortControllers.push(controller);
+
+    // 先渲染所有加载中的卡片
+    const codeElements: Record<string, HTMLElement> = {};
+    for (const code of codes) {
+      const indexElement = document.createElement('div');
+      indexElement.className = 'index-card loading';
       indexElement.innerHTML = `
-        <div class="index-card error">
-          <h4>${index.name}</h4>
-          <p class="code">${index.code}</p>
-          <p class="error-message">⚠️ 获取数据失败</p>
+        <h4>${indexMap[code]}</h4>
+        <p class="code">${code}</p>
+        <div class="loading-indicator">
+          <div class="loading-spinner-small"></div>
+          <span>加载中...</span>
         </div>
       `;
+      container.appendChild(indexElement);
+      codeElements[code] = indexElement;
+      this.updateLoadingProgress();
     }
 
-    return indexElement;
+    // 使用 SSE 流式获取数据
+    return new Promise<void>((resolve, reject) => {
+      api.getIndexBatchStream(codes, {
+        onIndex: (result) => {
+          const { code, success, data } = result;
+          const element = codeElements[code];
+          if (!element) return;
+
+          if (success && data) {
+            this.marketData[code] = data;
+            // 替换为成功卡片
+            const newElement = document.createElement('div');
+            newElement.className = 'index-card';
+            newElement.innerHTML = this.renderIndexCard(data);
+            newElement.addEventListener('click', () => {
+              this.showMarketDetails(data, 'indices');
+            });
+            element.replaceWith(newElement);
+            codeElements[code] = newElement;
+          } else {
+            // 替换为错误卡片
+            const newElement = document.createElement('div');
+            newElement.className = 'index-card error';
+            newElement.innerHTML = `
+              <h4>${indexMap[code]}</h4>
+              <p class="code">${code}</p>
+              <p class="error-message">⚠️ 获取数据失败</p>
+            `;
+            element.replaceWith(newElement);
+            codeElements[code] = newElement;
+          }
+        },
+        onProgress: (progress) => {
+          console.log(`国内指数加载进度: ${progress.current}/${progress.total}, 成功: ${progress.successCount}, 失败: ${progress.failedCount}`);
+        },
+        onComplete: (summary) => {
+          console.log(`国内指数加载完成: 总计 ${summary.total}, 成功: ${summary.successCount}, 失败: ${summary.failedCount}`);
+          // 从列表中移除已完成的 controller
+          const index = this.abortControllers.indexOf(controller);
+          if (index > -1) {
+            this.abortControllers.splice(index, 1);
+          }
+          resolve();
+        },
+        onError: (code, message) => {
+          console.error(`国内指数 ${code} 加载失败:`, message);
+          const element = codeElements[code];
+          if (element) {
+            const newElement = document.createElement('div');
+            newElement.className = 'index-card error';
+            newElement.innerHTML = `
+              <h4>${indexMap[code]}</h4>
+              <p class="code">${code}</p>
+              <p class="error-message">⚠️ 获取数据失败</p>
+            `;
+            element.replaceWith(newElement);
+            codeElements[code] = newElement;
+          }
+        }
+      }, controller.signal).catch(error => {
+        console.error('SSE 流式加载国内指数失败:', error);
+        // 从列表中移除已完成的 controller
+        const index = this.abortControllers.indexOf(controller);
+        if (index > -1) {
+          this.abortControllers.splice(index, 1);
+        }
+        reject(error);
+      });
+    });
   }
 
-  private renderIndexCard(data: MarketData) {
+  // 使用 SSE 流式加载海外指数
+  private async loadGlobalIndicesBatched(
+    codes: string[],
+    indexMap: Record<string, string>,
+    container: Element | null
+  ) {
+    if (codes.length === 0 || !container) return;
+
+    // 创建 AbortController 用于取消请求
+    const controller = new AbortController();
+    this.abortControllers.push(controller);
+
+    // 先渲染所有加载中的卡片
+    const codeElements: Record<string, HTMLElement> = {};
+    for (const code of codes) {
+      const indexElement = document.createElement('div');
+      indexElement.className = 'index-card loading';
+      indexElement.innerHTML = `
+        <h4>${indexMap[code]}</h4>
+        <p class="code">${code}</p>
+        <div class="loading-indicator">
+          <div class="loading-spinner-small"></div>
+          <span>加载中...</span>
+        </div>
+      `;
+      container.appendChild(indexElement);
+      codeElements[code] = indexElement;
+      this.updateLoadingProgress();
+    }
+
+    // 使用 SSE 流式获取数据
+    return new Promise<void>((resolve, reject) => {
+      api.getGlobalIndexBatchStream(codes, {
+        onIndex: (result) => {
+          const { code, success, data } = result;
+          const element = codeElements[code];
+          if (!element) return;
+
+          if (success && data) {
+            this.marketData[code] = data;
+            // 替换为成功卡片
+            const newElement = document.createElement('div');
+            newElement.className = 'index-card';
+            newElement.innerHTML = this.renderIndexCard(data);
+            newElement.addEventListener('click', () => {
+              this.showMarketDetails(data, 'indices');
+            });
+            element.replaceWith(newElement);
+            codeElements[code] = newElement;
+          } else {
+            // 替换为错误卡片
+            const newElement = document.createElement('div');
+            newElement.className = 'index-card error';
+            newElement.innerHTML = `
+              <h4>${indexMap[code]}</h4>
+              <p class="code">${code}</p>
+              <p class="error-message">⚠️ 获取数据失败</p>
+            `;
+            element.replaceWith(newElement);
+            codeElements[code] = newElement;
+          }
+        },
+        onProgress: (progress) => {
+          console.log(`海外指数加载进度: ${progress.current}/${progress.total}, 成功: ${progress.successCount}, 失败: ${progress.failedCount}`);
+        },
+        onComplete: (summary) => {
+          console.log(`海外指数加载完成: 总计 ${summary.total}, 成功: ${summary.successCount}, 失败: ${summary.failedCount}`);
+          // 从列表中移除已完成的 controller
+          const index = this.abortControllers.indexOf(controller);
+          if (index > -1) {
+            this.abortControllers.splice(index, 1);
+          }
+          resolve();
+        },
+        onError: (code, message) => {
+          console.error(`海外指数 ${code} 加载失败:`, message);
+          const element = codeElements[code];
+          if (element) {
+            const newElement = document.createElement('div');
+            newElement.className = 'index-card error';
+            newElement.innerHTML = `
+              <h4>${indexMap[code]}</h4>
+              <p class="code">${code}</p>
+              <p class="error-message">⚠️ 获取数据失败</p>
+            `;
+            element.replaceWith(newElement);
+            codeElements[code] = newElement;
+          }
+        }
+      }, controller.signal).catch(error => {
+        console.error('SSE 流式加载海外指数失败:', error);
+        // 从列表中移除已完成的 controller
+        const index = this.abortControllers.indexOf(controller);
+        if (index > -1) {
+          this.abortControllers.splice(index, 1);
+        }
+        reject(error);
+      });
+    });
+  }
+
+  private renderIndexCard(data: any) {
     const changeClass = data.change_percent && data.change_percent >= 0 ? 'positive' : 'negative';
     const changeIcon = data.change_percent && data.change_percent >= 0 ? '📈' : '📉';
+    const price = typeof data.price === 'number' ? data.price.toFixed(2) : '-';
+    const changePercent = typeof data.change_percent === 'number' ? data.change_percent.toFixed(2) + '%' : 'N/A';
+    const change = typeof data.change === 'number' ? (data.change >= 0 ? '+' : '') + data.change.toFixed(2) : '';
+
     return `
       <div class="index-card">
-        <h4>${data.name}</h4>
-        <p class="code">${data.code}</p>
+        <h4>${data.name || '未知'}</h4>
+        <p class="code">${data.code || ''}</p>
         <div class="price-info">
-          <p class="price">${data.price.toFixed(2)}</p>
+          <p class="price">${price}</p>
           <div class="change ${changeClass}">
-            <span class="change-percent">${changeIcon} ${data.change_percent ? data.change_percent.toFixed(2) + '%' : 'N/A'}</span>
-            ${data.change ? `<span class="change-value">${data.change >= 0 ? '+' : ''}${data.change.toFixed(2)}</span>` : ''}
+            <span class="change-percent">${changeIcon} ${changePercent}</span>
+            ${change ? `<span class="change-value">${change}</span>` : ''}
           </div>
         </div>
-        <p class="timestamp">🕐 ${new Date(data.timestamp).toLocaleString()}</p>
+        <p class="timestamp">🕐 ${new Date().toLocaleString()}</p>
       </div>
     `;
   }
@@ -288,33 +618,46 @@ class MarketDataUI {
     `;
 
     try {
-      let marketData: MarketData | null;
-      switch (assetType) {
-        case 'stock':
-          marketData = await api.getStockPrice(assetCode);
-          break;
-        case 'etf':
-          marketData = await api.getEtfPrice(assetCode);
-          break;
-        case 'index':
-          marketData = await api.getIndexPrice(assetCode);
-          break;
-        case 'global-index':
-          marketData = await api.getGlobalIndexPrice(assetCode);
-          break;
-        default:
-          marketData = null;
+      let response: any;
+      let cacheKey = `${assetType}_${assetCode}`;
+
+      // 检查缓存
+      let marketData = this.getCachedData(cacheKey);
+
+      if (!marketData) {
+        switch (assetType) {
+          case 'stock':
+            response = await api.getStockPrice(assetCode);
+            break;
+          case 'etf':
+            response = await api.getEtfPrice(assetCode);
+            break;
+          case 'index':
+            response = await api.getIndexPrice(assetCode);
+            break;
+          case 'global-index':
+            response = await api.getGlobalIndexPrice(assetCode);
+            break;
+          default:
+            response = null;
+        }
+
+        if (response && response.success && response.data) {
+          marketData = response.data;
+          // 缓存数据
+          this.setCachedData(cacheKey, marketData);
+        }
       }
 
       if (marketData) {
-        this.marketData[marketData.code] = marketData;
+        this.marketData[marketData.code || assetCode] = marketData;
         searchResultContainer.innerHTML = this.renderSearchResult(marketData);
 
         // 添加查看详情按钮事件
         const viewDetailsButton = searchResultContainer.querySelector<HTMLButtonElement>('.view-details-button');
         if (viewDetailsButton) {
           viewDetailsButton.addEventListener('click', () => {
-            this.showMarketDetails(marketData!);
+            this.showMarketDetails(marketData, 'search');
           });
         }
       } else {
@@ -338,65 +681,230 @@ class MarketDataUI {
     }
   }
 
-  private renderSearchResult(data: MarketData) {
+  private renderSearchResult(data: any) {
     const changeClass = data.change_percent && data.change_percent >= 0 ? 'positive' : 'negative';
     const changeIcon = data.change_percent && data.change_percent >= 0 ? '📈' : '📉';
+    const price = typeof data.price === 'number' ? data.price.toFixed(2) : '-';
+    const changePercent = typeof data.change_percent === 'number' ? data.change_percent.toFixed(2) + '%' : 'N/A';
+    const change = typeof data.change === 'number' ? (data.change >= 0 ? '+' : '') + data.change.toFixed(2) : '';
+
     return `
       <div class="search-result success scale-in">
-        <h4>${data.name}</h4>
-        <p class="code">${data.code}</p>
+        <h4>${data.name || '未知'}</h4>
+        <p class="code">${data.code || ''}</p>
         <div class="price-info">
-          <p class="price">${data.price.toFixed(2)}</p>
+          <p class="price">${price}</p>
           <div class="change ${changeClass}">
-            <span class="change-percent">${changeIcon} ${data.change_percent ? data.change_percent.toFixed(2) + '%' : 'N/A'}</span>
-            ${data.change ? `<span class="change-value">${data.change >= 0 ? '+' : ''}${data.change.toFixed(2)}</span>` : ''}
+            <span class="change-percent">${changeIcon} ${changePercent}</span>
+            ${change ? `<span class="change-value">${change}</span>` : ''}
           </div>
         </div>
         ${data.volume ? `<p class="volume">📊 成交量：${data.volume}</p>` : ''}
-        <p class="timestamp">🕐 ${new Date(data.timestamp).toLocaleString()}</p>
+        <p class="timestamp">🕐 ${new Date().toLocaleString()}</p>
         <button class="view-details-button btn btn-primary">📋 查看详情</button>
       </div>
     `;
   }
 
-  private showMarketDetails(data: MarketData) {
+  private showMarketDetails(data: any, sourceTab: string = 'indices') {
+    this.previousTab = sourceTab; // 记录来源标签
     this.currentTab = 'details';
     this.render();
 
     const marketDetailsContainer = this.container.querySelector('#market-details');
     if (marketDetailsContainer) {
       marketDetailsContainer.innerHTML = this.renderMarketDetails(data);
+      // 绑定返回按钮事件
+      this.bindBackButton();
+      // 加载并绘制价格走势
+      this.loadAndDrawPriceChart(data);
     }
   }
 
-  private renderMarketDetails(data: MarketData) {
+  private bindBackButton() {
+    const backButton = this.container.querySelector<HTMLButtonElement>('#back-to-indices');
+    if (backButton) {
+      backButton.addEventListener('click', () => {
+        this.currentTab = this.previousTab;
+        this.render();
+        if (this.currentTab === 'indices') {
+          // 返回时使用缓存，不强制刷新
+          this.loadSupportedIndices(false);
+        }
+      });
+    }
+  }
+
+  // 加载并绘制价格走势
+  private async loadAndDrawPriceChart(data: any) {
+    const canvas = this.container.querySelector<HTMLCanvasElement>('#price-chart-canvas');
+    if (!canvas) return;
+
+    const code = data.code;
+    const dataType = data.type || 'index';
+
+    try {
+      // 从后端获取历史价格
+      const response = await api.getPriceHistory(code, dataType, 30);
+
+      if (response.success && response.data && response.data.history.length > 0) {
+        const history = response.data.history.map((item: any) => ({
+          timestamp: new Date(item.timestamp).getTime(),
+          price: item.price
+        }));
+
+        this.drawPriceChart(canvas, history, data.change_percent >= 0);
+      } else {
+        // 没有历史数据，显示提示
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#999';
+          ctx.font = '14px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('暂无历史数据', canvas.width / 2, canvas.height / 2);
+        }
+      }
+    } catch (error) {
+      console.error('获取价格历史失败:', error);
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#e74c3c';
+        ctx.font = '14px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('获取历史数据失败', canvas.width / 2, canvas.height / 2);
+      }
+    }
+  }
+
+  // 绘制价格走势图
+  private drawPriceChart(
+    canvas: HTMLCanvasElement,
+    history: { timestamp: number; price: number }[],
+    isPositive: boolean
+  ) {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const width = canvas.width;
+    const height = canvas.height;
+    const padding = { top: 20, right: 20, bottom: 30, left: 60 };
+
+    // 清空画布
+    ctx.clearRect(0, 0, width, height);
+
+    // 计算价格范围
+    const prices = history.map(h => h.price);
+    const minPrice = Math.min(...prices);
+    const maxPrice = Math.max(...prices);
+    const priceRange = maxPrice - minPrice || 1;
+
+    // 绘制网格线
+    ctx.strokeStyle = '#e0e0e0';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = padding.top + (height - padding.top - padding.bottom) * i / 4;
+      ctx.beginPath();
+      ctx.moveTo(padding.left, y);
+      ctx.lineTo(width - padding.right, y);
+      ctx.stroke();
+
+      // Y轴标签
+      const price = maxPrice - priceRange * i / 4;
+      ctx.fillStyle = '#666';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(price.toFixed(2), padding.left - 5, y + 4);
+    }
+
+    // 绘制价格线
+    const chartWidth = width - padding.left - padding.right;
+    const chartHeight = height - padding.top - padding.bottom;
+
+    ctx.strokeStyle = isPositive ? '#e74c3c' : '#27ae60'; // 红涨绿跌
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+
+    history.forEach((point, index) => {
+      const x = padding.left + (chartWidth * index / (history.length - 1));
+      const y = padding.top + chartHeight * (1 - (point.price - minPrice) / priceRange);
+
+      if (index === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+
+    ctx.stroke();
+
+    // 绘制数据点
+    history.forEach((point, index) => {
+      const x = padding.left + (chartWidth * index / (history.length - 1));
+      const y = padding.top + chartHeight * (1 - (point.price - minPrice) / priceRange);
+
+      ctx.fillStyle = isPositive ? '#e74c3c' : '#27ae60';
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // 绘制X轴时间标签（只显示首尾）
+    if (history.length > 0) {
+      ctx.fillStyle = '#666';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+
+      const firstTime = new Date(history[0].timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+      const lastTime = new Date(history[history.length - 1].timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+      ctx.fillText(firstTime, padding.left, height - 10);
+      ctx.fillText(lastTime, width - padding.right, height - 10);
+    }
+
+    // 绘制标题
+    ctx.fillStyle = '#333';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('实时价格走势', width / 2, 15);
+  }
+
+  private renderMarketDetails(data: any) {
     const changeClass = data.change_percent && data.change_percent >= 0 ? 'positive' : 'negative';
     const changeIcon = data.change_percent && data.change_percent >= 0 ? '📈' : '📉';
+    const price = typeof data.price === 'number' ? data.price.toFixed(2) : '-';
+    const changePercent = typeof data.change_percent === 'number' ? data.change_percent.toFixed(2) + '%' : 'N/A';
+    const change = typeof data.change === 'number' ? (data.change >= 0 ? '+' : '') + data.change.toFixed(2) : '';
+
+    // 根据来源决定返回按钮文本
+    const backButtonText = this.previousTab === 'search' ? '← 返回行情查询' : '← 返回指数列表';
+
     return `
       <div class="market-details-content scale-in">
         <div class="details-header">
-          <button class="back-button" id="back-to-indices">← 返回指数列表</button>
-          <h4>${data.name}</h4>
+          <button class="back-button" id="back-to-indices">${backButtonText}</button>
+          <h4>${data.name || '未知'}</h4>
         </div>
-        <p class="code" style="color: var(--text-tertiary); margin-bottom: 24px;">🏷️ ${data.code}</p>
+        <p class="code" style="color: var(--text-tertiary); margin-bottom: 24px;">🏷️ ${data.code || ''}</p>
 
         <div class="details-grid">
           <div class="detail-item">
             <span class="label">📊 当前价格</span>
-            <span class="value price">${data.price.toFixed(2)}</span>
+            <span class="value price">${price}</span>
           </div>
 
-          ${data.change ? `
+          ${data.change !== undefined ? `
             <div class="detail-item">
               <span class="label">📈 涨跌额</span>
-              <span class="value ${changeClass}">${data.change >= 0 ? '+' : ''}${data.change.toFixed(2)}</span>
+              <span class="value ${changeClass}">${change}</span>
             </div>
           ` : ''}
 
-          ${data.change_percent ? `
+          ${data.change_percent !== undefined ? `
             <div class="detail-item">
               <span class="label">📉 涨跌幅</span>
-              <span class="value ${changeClass}">${changeIcon} ${data.change_percent.toFixed(2)}%</span>
+              <span class="value ${changeClass}">${changeIcon} ${changePercent}</span>
             </div>
           ` : ''}
 
@@ -409,16 +917,14 @@ class MarketDataUI {
 
           <div class="detail-item">
             <span class="label">🕐 更新时间</span>
-            <span class="value">${new Date(data.timestamp).toLocaleString()}</span>
+            <span class="value">${new Date().toLocaleString()}</span>
           </div>
         </div>
 
         <div class="chart-container">
           <h5>📈 价格走势</h5>
           <div id="price-chart" class="price-chart">
-            <div class="empty-state" style="padding: 40px;">
-              <p style="color: var(--text-tertiary);">📊 图表功能待集成</p>
-            </div>
+            <canvas id="price-chart-canvas" width="600" height="200" style="width: 100%; height: 200px;"></canvas>
           </div>
         </div>
       </div>
