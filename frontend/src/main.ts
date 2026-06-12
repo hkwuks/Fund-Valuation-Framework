@@ -63,21 +63,21 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <span class="tab-button-icon">💼</span>
         基金管理
       </button>
-      <button class="tab-button" data-tab="market-data" role="tab" aria-selected="false">
-        <span class="tab-button-icon">🌍</span>
-        市场数据
-      </button>
       <button class="tab-button" data-tab="gold-prediction" role="tab" aria-selected="false">
         <span class="tab-button-icon">🥇</span>
         黄金预测
+      </button>
+      <button class="tab-button" data-tab="market-data" role="tab" aria-selected="false">
+        <span class="tab-button-icon">🌍</span>
+        市场数据
       </button>
     </nav>
 
     <!-- 标签内容区域 -->
     <main>
       <div class="tab-content active" id="fund-manager-container" role="tabpanel"></div>
-      <div class="tab-content" id="market-data-container" role="tabpanel"></div>
       <div class="tab-content" id="gold-prediction-container" role="tabpanel"></div>
+      <div class="tab-content" id="market-data-container" role="tabpanel"></div>
     </main>
   </div>
 `

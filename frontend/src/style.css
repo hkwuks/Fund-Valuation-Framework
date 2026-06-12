@@ -9,17 +9,17 @@
 }
 
 :root {
-  /* 主色调 - 渐变蓝色 */
-  --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  --primary-gradient-hover: linear-gradient(135deg, #5a6fd6 0%, #6a4190 100%);
-  --primary-color: #667eea;
-  --primary-hover: #5a6fd6;
-  --primary-light: rgba(102, 126, 234, 0.1);
-  --primary-glow: rgba(102, 126, 234, 0.4);
+  /* 主色调 - 白色为主，深灰蓝点缀交互元素 */
+  --primary-gradient: linear-gradient(135deg, #334155 0%, #475569 100%);
+  --primary-gradient-hover: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+  --primary-color: #475569;
+  --primary-hover: #334155;
+  --primary-light: rgba(51, 65, 85, 0.08);
+  --primary-glow: rgba(51, 65, 85, 0.2);
 
   /* 辅助色 */
-  --accent-color: #f093fb;
-  --accent-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  --accent-color: #94a3b8;
+  --accent-gradient: linear-gradient(135deg, #94a3b8 0%, #64748b 100%);
 
   /* 功能色 */
   --success-color: #10b981;
@@ -31,10 +31,10 @@
   --info-color: #3b82f6;
   --info-gradient: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
 
-  /* 文本色 */
-  --text-primary: #1f2937;
-  --text-secondary: #6b7280;
-  --text-tertiary: #9ca3af;
+  /* 文本色 - 白色主题下加深保证对比度 */
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-tertiary: #64748b;
   --text-inverse: #ffffff;
 
   /* 背景色 */
@@ -43,17 +43,17 @@
   --bg-tertiary: #eef1f5;
   --bg-gradient: linear-gradient(180deg, #f5f7fa 0%, #e8ecf1 100%);
 
-  /* 边框色 */
-  --border-color: #e0e4ea;
-  --border-light: #eef1f5;
+  /* 边框色 - 加深保证可见性 */
+  --border-color: #cbd5e1;
+  --border-light: #e2e8f0;
 
-  /* 阴影 */
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-  --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-  --shadow-xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-  --shadow-glow: 0 0 20px rgba(102, 126, 234, 0.3);
+  /* 阴影 - 加深层次感 */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.08);
+  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.12), 0 2px 4px -1px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 10px 15px -3px rgba(0, 0, 0, 0.12), 0 4px 6px -2px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.14), 0 10px 10px -5px rgba(0, 0, 0, 0.06);
+  --shadow-xl: 0 25px 50px -12px rgba(0, 0, 0, 0.3);
+  --shadow-glow: 0 0 20px rgba(148, 163, 184, 0.15);
 
   /* 圆角 */
   --radius-sm: 6px;
@@ -123,8 +123,8 @@ body {
     linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
     /* 中间层：装饰性光晕 */
-    radial-gradient(ellipse at 20% 20%, rgba(102, 126, 234, 0.08) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 80%, rgba(118, 75, 162, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 20% 20%, rgba(148, 163, 184, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 80%, rgba(100, 116, 139, 0.06) 0%, transparent 50%),
     /* 底层：主背景渐变 */
     var(--bg-gradient);
   background-size:
@@ -151,8 +151,8 @@ body::before {
   width: 200%;
   height: 200%;
   background:
-    radial-gradient(circle at 50% 50%, rgba(102, 126, 234, 0.04), transparent 60%),
-    radial-gradient(circle at 30% 70%, rgba(118, 75, 162, 0.04), transparent 60%);
+    radial-gradient(circle at 50% 50%, rgba(148, 163, 184, 0.03), transparent 60%),
+    radial-gradient(circle at 30% 70%, rgba(100, 116, 139, 0.03), transparent 60%);
   animation: backgroundFloat 20s ease-in-out infinite;
   pointer-events: none;
   z-index: -1;
@@ -1886,6 +1886,38 @@ tr:hover {
   color: var(--text-secondary);
 }
 
+/* 缓存时间控件 */
+.cache-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cache-ttl-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.cache-ttl-select {
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+  transition: var(--transition-fast);
+}
+
+.cache-ttl-select:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--primary-light);
+}
+
 .clear-cache-button:hover {
   background: var(--border-color);
   color: var(--text-primary);
@@ -2320,8 +2352,8 @@ body::after {
   right: 0;
   bottom: 0;
   background:
-    radial-gradient(circle at 90% 10%, rgba(102, 126, 234, 0.06), transparent 40%),
-    radial-gradient(circle at 10% 90%, rgba(118, 75, 162, 0.06), transparent 40%);
+    radial-gradient(circle at 90% 10%, rgba(148, 163, 184, 0.04), transparent 40%),
+    radial-gradient(circle at 10% 90%, rgba(100, 116, 139, 0.04), transparent 40%);
   pointer-events: none;
   z-index: -1;
   animation: backgroundGlow 15s ease-in-out infinite;
